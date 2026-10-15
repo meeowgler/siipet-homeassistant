@@ -6,7 +6,7 @@ import json
 from unittest.mock import AsyncMock, patch
 
 from homeassistant.components.diagnostics import REDACTED
-from homeassistant.const import CONF_EMAIL
+from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 from pytest_homeassistant_custom_component.test_util.aiohttp import (
@@ -199,3 +199,8 @@ async def test_device_state_diagnostics(
         ],
     }
     assert "SN0001" not in json.dumps(result, default=str)
+
+
+def test_password_is_redacted() -> None:
+    """The stored password is on the redaction list."""
+    assert CONF_PASSWORD in TO_REDACT

@@ -2,27 +2,37 @@
   "config": {
     "step": {
       "email": {
-        "title": "Zaloguj się kodem z e-maila",
-        "description": "Wprowadź adres e-mail konta SiiPet. SiiPet wyśle na ten adres kod logowania.",
+        "title": "Zaloguj się do SiiPet",
+        "description": "Wprowadź adres e-mail konta SiiPet. Jeśli konto ma hasło, wprowadź je też, a SiiPet nie wyśle kodu. W przeciwnym razie zostaw hasło puste, a SiiPet wyśle na ten adres kod logowania.",
         "data": {
-          "email": "E-mail"
+          "email": "E-mail",
+          "password": "Hasło"
+        },
+        "data_description": {
+          "password": "Opcjonalne. Z hasłem Home Assistant sam zaloguje się ponownie, gdy SiiPet zakończy sesję, więc nie potrzebuje nowego kodu."
         }
       },
       "code": {
         "title": "Wprowadź kod",
-        "description": "Wprowadź kod, który SiiPet wysłał na adres {email}.",
+        "description": "Wprowadź kod, który SiiPet wysłał na adres {email}. Aby ustawić hasło do tego konta, wprowadź też nowe hasło. SiiPet nie wyśle Ci hasła, więc zapisz je w bezpiecznym miejscu.",
         "data": {
-          "code": "Kod"
+          "code": "Kod",
+          "new_password": "Nowe hasło"
+        },
+        "data_description": {
+          "new_password": "Opcjonalne. Kod ustawi to hasło na koncie, a Home Assistant zaloguje się nim. Zostaw puste, aby zalogować się tylko kodem."
         }
       }
     },
     "error": {
       "cannot_connect": "Nie można połączyć się z SiiPet. Spróbuj ponownie później.",
       "code_request_failed": "SiiPet nie wysłał kodu. Sprawdź adres e-mail i spróbuj ponownie.",
+      "invalid_auth": "SiiPet odrzucił adres e-mail i hasło. Jeśli konto nie ma jeszcze hasła, zostaw hasło puste, aby dostać kod, i ustaw hasło w następnym kroku.",
       "invalid_code": "Kod jest nieprawidłowy albo wygasł.",
       "invalid_email": "Wprowadź prawidłowy adres e-mail.",
       "login_failed": "SiiPet odrzucił logowanie. Zamknij ten formularz i zacznij od nowa, aby dostać nowy kod.",
-      "session_rejected": "SiiPet przyjął kod, ale odrzucił nową sesję. Zamknij ten formularz i zacznij od nowa, aby dostać nowy kod.",
+      "session_rejected": "SiiPet przyjął logowanie, ale odrzucił nową sesję. Zamknij ten formularz i zacznij od nowa.",
+      "set_password_failed": "SiiPet nie ustawił hasła. Zamknij ten formularz i zacznij od nowa, aby dostać nowy kod.",
       "too_many_requests": "SiiPet pozwala poprosić o kod tylko kilka razy dziennie. Spróbuj ponownie jutro.",
       "unknown": "Wystąpił nieoczekiwany błąd. Szczegóły są w logu."
     },

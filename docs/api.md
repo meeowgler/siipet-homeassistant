@@ -150,6 +150,44 @@ A refresh token is a credential for obtaining another access token.
 Android supports automatic renewal with the existing access token, as described
 below.
 
+### Password sign-in
+
+The Android app declares `POST /api/v1/user/email/login` in `AppApi.login`
+with a `LoginEmailRequest` of `Email` and `Password`. No screen of app 2.1.1 calls it.
+
+The password is the lowercase SHA-256 hex digest of its UTF-8 bytes,
+the same value that the app sends when it sets a password (see below).
+The request needs no challenge and no code, so the daily code limit does not apply.
+
+```json
+{
+  "Email": "<email address>",
+  "Password": "<SHA-256 hex digest of the password>"
+}
+```
+
+The response has the shape of the email-code login: `Data.Token` and `Data.ExpireAt`.
+An account without a password and an unknown address both answer `Code` 10003
+with `Msg` "not register".
+
+### Set a password
+
+`AccountSetViewModel` in the Android app sets the account password with
+`AccountRepository.resetPswEmail`. It sends `POST /api/v1/user/email/reset`
+with the emailed code, the address, and the password digest from `SHAUtil.shaEncrypt`,
+which is SHA-256 in lowercase hex.
+
+```json
+{
+  "Code": "<code from the email>",
+  "Email": "<email address>",
+  "Password": "<SHA-256 hex digest of the password>"
+}
+```
+
+The code comes from the same email request as the sign-in, with `Scene` 0.
+The call returns `Code` 0 and no token. It does not sign in.
+
 ### Session renewal
 
 A JWT is a token with signed data. The access token uses this format and contains
@@ -919,6 +957,7 @@ They were not tested against the service unless this section says so.
 - The app does not read the HTTP status. The integration also treats HTTP 401 and 403 as an ended session.
 - The app renews the token only when it opens, with the rule `now + 24 h > ExpireAt`. A failed renewal is only logged.
 - A wrong email code at `/api/v1/user/email/register/login` returns `Code` 10004. The app shows other codes with `Msg`.
+- The app has no screen that signs in with a password. It can set a password with an emailed code. See "Set a password".
 
 ### Request headers of the Android app
 
@@ -1062,6 +1101,14 @@ These results come from tests against a real account.
   - Neither connection saw an interruption.
   - `battery.SOC` was an integer on three cameras and a fraction on one.
   - `Data.IotCore.Endpoint` uses an `https://` scheme.
+- An account that had only signed in with email codes got a password through `/api/v1/user/email/reset`,
+  with a code from `send/trustworthy` and `Scene` 0. The call returned `Code` 0.
+  A sign-in through `/api/v1/user/email/login` with that password then returned a token,
+  and `/api/v1/user/device/sync` with that token returned `Code` 0.
+- A password sign-in from a script ended the session of the phone app on the same account.
+  The app showed its sign-in screen. This fits one active session per account.
+- `/api/v1/user/email/login` answered `Code` 10003 "not register" for an account without a password
+  and for an address without an account.
 - The integration's own MQTT connection ran for 120 seconds against the owner account. It connected and reported a state for all 4 cameras. Its log held no serial number, shadow name, identity, or signed URL.
 - After the deploy of the device state, the invited-account instance created the device state entities of all 4 cameras. The owner instance showed battery values for all 4 cameras, all online, privacy mode off, and update mode manual. One camera on external power reported `charging: true` at 99% battery, the first live sample with that value.
 - Both instances ran the device state for 11 hours after a restart, through the planned reconnect before the IoT credentials expire.
@@ -1098,7 +1145,11 @@ These results come from tests against a real account.
   app treats -2 and -4 as an ended session.
 - Whether the server checks `x-device-os`. `iOS 27.0` works with both model prefixes.
 - Whether an account allows more than one active session. The earlier -2 results
-  came from the model header, so they do not answer this.
+  came from the model header, so they do not answer this. A password sign-in
+  from a script ended the session of the phone app (see Live checks).
+- The envelope code for a wrong password on an account that has a password.
+- Whether the server accepts one code for both `/api/v1/user/email/reset` and
+  `/api/v1/user/email/register/login`.
 - Whether the session of the phone app lasts longer than one hour after an
   email-code sign-in from Home Assistant.
 - Whether a renewal ends the other session when Home Assistant and the phone app

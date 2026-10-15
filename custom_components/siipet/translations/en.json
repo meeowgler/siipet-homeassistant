@@ -2,27 +2,37 @@
   "config": {
     "step": {
       "email": {
-        "title": "Sign in with an email code",
-        "description": "Enter the email address of your SiiPet account. SiiPet sends a sign-in code to this address.",
+        "title": "Sign in to SiiPet",
+        "description": "Enter the email address of your SiiPet account. If the account has a password, enter it too, and SiiPet sends no code. Otherwise leave the password empty, and SiiPet sends a sign-in code to this address.",
         "data": {
-          "email": "Email"
+          "email": "Email",
+          "password": "Password"
+        },
+        "data_description": {
+          "password": "Optional. With a password, Home Assistant signs in again by itself when SiiPet ends the session, so it does not need a new code."
         }
       },
       "code": {
         "title": "Enter the code",
-        "description": "Enter the code that SiiPet sent to {email}.",
+        "description": "Enter the code that SiiPet sent to {email}. To set a password for this account, also enter a new password. SiiPet does not send the password to you, so keep it safe.",
         "data": {
-          "code": "Code"
+          "code": "Code",
+          "new_password": "New password"
+        },
+        "data_description": {
+          "new_password": "Optional. The code sets this password on the account, and Home Assistant signs in with it. Leave it empty to sign in with the code only."
         }
       }
     },
     "error": {
       "cannot_connect": "Cannot connect to SiiPet. Try again later.",
       "code_request_failed": "SiiPet did not send a code. Check the email address and try again.",
+      "invalid_auth": "SiiPet rejected the email and password. If the account has no password yet, leave the password empty to get a code, and set a password in the next step.",
       "invalid_code": "The code is not correct or it expired.",
       "invalid_email": "Enter a valid email address.",
       "login_failed": "SiiPet rejected the sign-in. Close this form and start again to get a new code.",
-      "session_rejected": "SiiPet accepted the code, but rejected the new session. Close this form and start again to get a new code.",
+      "session_rejected": "SiiPet accepted the sign-in, but rejected the new session. Close this form and start again.",
+      "set_password_failed": "SiiPet did not set the password. Close this form and start again to get a new code.",
       "too_many_requests": "SiiPet allows only a few code requests per day. Try again tomorrow.",
       "unknown": "An unexpected error occurred. Read the log for details."
     },

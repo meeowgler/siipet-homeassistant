@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 from dataclasses import dataclass
+import hashlib
 import json
 import os
 from typing import Any
@@ -28,6 +29,11 @@ def encrypt_challenge(
         nonce = os.urandom(NONCE_SIZE)
     sealed = AESGCM(key).encrypt(nonce, verify_code.encode(), None)
     return base64.b64encode(nonce + sealed).decode()
+
+
+def hash_password(password: str) -> str:
+    """Return the password as the app sends it: the SHA-256 hex digest of its UTF-8 bytes."""
+    return hashlib.sha256(password.encode()).hexdigest()
 
 
 def read_token_payload(token: str) -> dict[str, Any]:

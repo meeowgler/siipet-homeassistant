@@ -12,6 +12,7 @@ CONF_CLIENT_ID: Final = "client_id"
 CONF_CODE: Final = "code"
 CONF_EXPIRE_AT: Final = "expire_at"
 CONF_MEDIA_DAYS: Final = "media_days"
+CONF_NEW_PASSWORD: Final = "new_password"
 CONF_TOKEN: Final = "token"
 # The keys that an entry needs to sign in. Entries from version 0.0.1 have none.
 SESSION_KEYS: Final = (CONF_TOKEN, CONF_EXPIRE_AT, CONF_CLIENT_ID)
@@ -22,6 +23,7 @@ MAX_MEDIA_DAYS: Final = 30
 MEDIA_FOLDER: Final = ".siipet"
 
 AUTH_EMAIL: Final = "email"
+AUTH_PASSWORD: Final = "password"
 AUTH_TOKEN: Final = "token"
 
 MANUFACTURER: Final = "SiiPet"

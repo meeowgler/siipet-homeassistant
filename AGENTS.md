@@ -24,7 +24,7 @@ custom_components/siipet/
     mqtt.py            MQTT 3.1.1 packets and MqttSession on an aiohttp WebSocket
     shadow_link.py     ShadowLink: one AWS IoT connection for the device shadows
   __init__.py          setup of the image and recording views, the actions, the card commands, and the card, entry setup that starts the device state and the local media copy, unload, entry removal that deletes the copy, device removal
-  config_flow.py       email and code steps, reauth and reconfigure, options step for the days of local media
+  config_flow.py       email step with an optional password, code step with an optional new password, reauth and reconfigure, options step for the days of local media
   const.py             constants: config keys, Unknown cat id, intervals
   coordinator.py       SiiPetCoordinator, SiiPetData, SiiPetRuntime
   device_state.py      SiiPetDeviceCoordinator: the device state that the shadow link pushes
@@ -99,6 +99,11 @@ Read `docs/api.md` before you change `api/`. These points cause most mistakes:
 - The server checks `x-device-model`. Values that start with `iPhone` or `android-phone` work. With a rejected value, every authenticated call fails with `Code` -2. The `Msg` then says that another device logged in, but that is not the cause.
 - Sign-in succeeds even with a rejected model, so the config flow reads the cats once before it creates the entry.
 - Email code requests are limited per day (`Code` 10010).
+- A password goes to the server as the lowercase SHA-256 hex digest of its UTF-8 bytes,
+  for both `user/email/login` and `user/email/reset`. A password sign-in needs no code.
+- `user/email/login` answers `Code` 10003 for an account without a password and for an unknown address.
+- With a stored password, the client signs in again by itself after an auth error,
+  at most once per `RELOGIN_COOLDOWN_MS`. Another sign-in to the same account ends the session.
 - `Data.IotCore.Endpoint` of `config/aws/auth` is an `https://` URL. The WebSocket host is its host part.
 - AWS IoT signs the WebSocket URL without the session token. The token goes after the signature.
 

@@ -10,6 +10,7 @@ import pytest
 from custom_components.siipet.api import Session, SiiPetError
 from custom_components.siipet.api.auth import (
     encrypt_challenge,
+    hash_password,
     needs_renewal,
     read_token_payload,
 )
@@ -78,3 +79,14 @@ def test_session_user_id() -> None:
 def test_needs_renewal(now_ms: int, expected: bool) -> None:
     """Renewal starts when less than one day remains before ExpireAt."""
     assert needs_renewal(1_000_000_000, now_ms) is expected
+
+
+def test_hash_password() -> None:
+    """The password is sent as the lowercase SHA-256 hex digest of its UTF-8 bytes."""
+    assert hash_password("password") == (
+        "5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8"
+    )
+    # Non-ASCII text is hashed as UTF-8.
+    assert hash_password("kot żółty") == (
+        "d68275a2f2e64cd355d75d50b9db35da25ab7e64628d992d7e9070efdbae2a31"
+    )
