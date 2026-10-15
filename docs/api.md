@@ -552,6 +552,43 @@ Its slider fallback values are `40`, `70`, and `120`.
 `JoyFillLightSetVM.requestConfigFillLight` obtains `brightness2` from a configuration map and falls back to `60` when the selected level has no entry.
 These client defaults do not establish device limits or a percentage scale.
 
+### Changing a setting (realtime control)
+
+The app changes a camera setting over a second realtime service, not the REST
+API. It is Centrifugo (`io.github.centrifugal` in the app) at
+`wss://wss-siipet.linkric.com/connection/websocket`, the JSON protocol.
+
+The connect command carries `data` of `{"platform": 1, "appConnectData":
+{"token": <api token>, "userId": <user id>}}`, so the same session token the
+REST and shadow lanes use authenticates the realtime lane too. There is no
+separate credential.
+
+The app publishes to the per-camera channel `device:joy1:<SN>:app:dev:request`.
+The message is:
+
+```json
+{
+  "request": {
+    "header": {"name": "<command>", "sessionId": "<uuid>", "deviceId": "<SN>"},
+    "payload": {...}
+  }
+}
+```
+
+`config.fillLight` sets the night light. Its payload is the whole `fillLight`
+object, so a change to one field keeps the others:
+
+```json
+{"autoLight": true, "brightness2": 70, "level": 2, "lowLight": true}
+```
+
+`level` is 1, 2, or 3 (low, medium, high). `brightness2` is the app's value for
+the level, from `JoyFillLightSetActivity`: 40, 70, 120. `JoyFillLightSetVM`
+writes the shadow `desired` first and then sends this command. Other commands
+seen in the app: `config.pir.sense`, `config.privacyMode`, `config.sleepMode`,
+`control.picture`, `control.video.start` / `stop`, `config.upgrade.info` /
+`start.upgrade`.
+
 Android `JoyPirSenseSetActivity.initPirSenseLevelData` offers level `2` as medium and level `3` as high.
 Its fallback `sense` values are `75` and `60`, respectively.
 The app can replace those values through a configuration map.
@@ -1062,6 +1099,15 @@ These results come from tests against a real account.
   - Neither connection saw an interruption.
   - `battery.SOC` was an integer on three cameras and a fraction on one.
   - `Data.IotCore.Endpoint` uses an `https://` scheme.
+- The realtime control lane works from an invited account. A `config.fillLight`
+  command on the `device:joy1:<SN>:app:dev:request` channel, with the connect
+  `data` carrying the API token and user id, changed the camera's reported
+  `fillLight.level` (tested low, medium, high) and its `lowLight` field. The
+  camera applied the command and reported the new value over its shadow.
+- The command alone is enough. Sent without the shadow `desired` write, the
+  camera still applied it and reported the change; the shadow then showed a
+  `delta` for the stale `desired`, which is cosmetic. The app writes `desired`
+  too, which clears the delta.
 - The integration's own MQTT connection ran for 120 seconds against the owner account. It connected and reported a state for all 4 cameras. Its log held no serial number, shadow name, identity, or signed URL.
 - After the deploy of the device state, the invited-account instance created the device state entities of all 4 cameras. The owner instance showed battery values for all 4 cameras, all online, privacy mode off, and update mode manual. One camera on external power reported `charging: true` at 99% battery, the first live sample with that value.
 - Both instances ran the device state for 11 hours after a restart, through the planned reconnect before the IoT credentials expire.
@@ -1097,6 +1143,12 @@ These results come from tests against a real account.
 - Which envelope codes the server returns for an expired or invalid token. The
   app treats -2 and -4 as an ended session.
 - Whether the server checks `x-device-os`. `iOS 27.0` works with both model prefixes.
+- Whether the camera reverts a setting to the shadow `desired` after a reboot
+  when only the command was sent. Writing `desired` with the command avoids it.
+- The `brightness2` values for levels other than the app's 40 / 70 / 120, and
+  whether a camera's system config overrides them.
+- The payloads of the other realtime commands (`config.pir.sense`,
+  `config.privacyMode`, and the rest).
 - Whether an account allows more than one active session. The earlier -2 results
   came from the model header, so they do not answer this.
 - Whether the session of the phone app lasts longer than one hour after an

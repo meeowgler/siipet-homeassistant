@@ -12,7 +12,7 @@ from homeassistant.helpers import config_validation as cv, device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.typing import ConfigType
 
-from .api import Session, SiiPetClient
+from .api import LrtmControl, Session, SiiPetClient
 from .api.s3 import S3Signer
 from .calendar_data import SiiPetCalendar
 from .card import async_register_card
@@ -42,7 +42,13 @@ from .websocket_api import async_setup_websocket_api
 
 _LOGGER = logging.getLogger(__name__)
 
-PLATFORMS: list[Platform] = [Platform.BINARY_SENSOR, Platform.EVENT, Platform.SENSOR]
+PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.EVENT,
+    Platform.SELECT,
+    Platform.SENSOR,
+    Platform.SWITCH,
+]
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
@@ -82,6 +88,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SiiPetConfigEntry) -> bo
         session=Session(entry.data[CONF_TOKEN], entry.data[CONF_EXPIRE_AT]),
         on_session_update=_async_save_session,
     )
+    control = LrtmControl(async_get_clientsession(hass), lambda: client.session)
     coordinator = SiiPetCoordinator(hass, entry, client)
     await coordinator.async_config_entry_first_refresh()
     media = SiiPetMedia(
@@ -90,6 +97,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SiiPetConfigEntry) -> bo
     device_state = SiiPetDeviceCoordinator(hass, entry, coordinator, client)
     entry.runtime_data = SiiPetRuntime(
         client=client,
+        control=control,
         coordinator=coordinator,
         media=media,
         calendar=SiiPetCalendar(client),

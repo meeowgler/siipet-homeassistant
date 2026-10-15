@@ -8,6 +8,7 @@ from .errors import (
     SiiPetConnectionError,
     SiiPetError,
 )
+from .lrtm import LrtmControl, LrtmError
 from .models import (
     AbnormalLabels,
     CalendarDay,
@@ -33,6 +34,8 @@ __all__ = [
     "DayVisits",
     "DeviceState",
     "IotCredentials",
+    "LrtmControl",
+    "LrtmError",
     "MediaCredentials",
     "Session",
     "SiiPetApiError",

@@ -98,6 +98,9 @@
     },
     "edit_not_applied": {
       "message": "SiiPet did not apply the change to visit {event_id}. Check the visit in the SiiPet app."
+    },
+    "control_failed": {
+      "message": "SiiPet did not accept the change. It may be offline; try again."
     }
   },
   "entity": {
@@ -191,6 +194,24 @@
           "automatic": "Automatic",
           "manual": "Manual"
         }
+      }
+    },
+    "select": {
+      "fill_light_brightness": {
+        "name": "Night light brightness",
+        "state": {
+          "low": "Low",
+          "medium": "Medium",
+          "high": "High"
+        }
+      }
+    },
+    "switch": {
+      "auto_fill_light": {
+        "name": "Auto fill light"
+      },
+      "night_vision": {
+        "name": "Night vision fill light"
       }
     }
   },

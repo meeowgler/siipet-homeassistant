@@ -98,6 +98,9 @@
     },
     "edit_not_applied": {
       "message": "SiiPet nie zastosował zmiany wizyty {event_id}. Sprawdź wizytę w aplikacji SiiPet."
+    },
+    "control_failed": {
+      "message": "SiiPet nie przyjął zmiany. Urządzenie może być offline; spróbuj ponownie."
     }
   },
   "entity": {
@@ -191,6 +194,24 @@
           "automatic": "Automatyczny",
           "manual": "Ręczny"
         }
+      }
+    },
+    "select": {
+      "fill_light_brightness": {
+        "name": "Jasność podświetlenia nocnego",
+        "state": {
+          "low": "Niska",
+          "medium": "Średnia",
+          "high": "Wysoka"
+        }
+      }
+    },
+    "switch": {
+      "auto_fill_light": {
+        "name": "Automatyczne doświetlenie"
+      },
+      "night_vision": {
+        "name": "Doświetlenie nocne"
       }
     }
   },

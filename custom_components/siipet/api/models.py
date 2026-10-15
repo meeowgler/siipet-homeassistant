@@ -427,6 +427,9 @@ _SHADOW_FIELDS: Final[
         "charging": (("battery", "charging"), _as_bool),
         "privacy": (("privacyMode", "active"), _as_bool),
         "fill_light": (("fillLight", "level"), _as_int),
+        "fill_light_auto": (("fillLight", "autoLight"), _as_bool),
+        "fill_light_low": (("fillLight", "lowLight"), _as_bool),
+        "fill_light_brightness": (("fillLight", "brightness2"), _as_int),
         "motion_level": (("pir", "level"), _as_int),
         "update_mode": (("otaMode", "mode"), _as_int),
         "cloud_storage": (("cloudMode", "enableCloud"), _as_bool),
@@ -482,6 +485,9 @@ class DeviceState:
     charging: bool | None = None
     privacy: bool | None = None
     fill_light: int | None = None
+    fill_light_auto: bool | None = None
+    fill_light_low: bool | None = None
+    fill_light_brightness: int | None = None
     motion_level: int | None = None
     update_mode: int | None = None
     cloud_storage: bool | None = None

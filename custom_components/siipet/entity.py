@@ -6,12 +6,13 @@ from collections.abc import Callable, Iterable
 from typing import Any
 
 from homeassistant.core import callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .api import Camera, DeviceState, Visit
+from .api import Camera, DeviceState, SiiPetError, Visit
 from .const import CAT_MODEL, DOMAIN, MANUFACTURER, UNKNOWN_CAT_ID, UNKNOWN_CAT_NAME
 from .coordinator import SiiPetConfigEntry, SiiPetCoordinator, SiiPetData
 from .device_state import SiiPetDeviceCoordinator
@@ -131,6 +132,41 @@ class SiiPetCameraStateEntity(CoordinatorEntity[SiiPetDeviceCoordinator]):
 
     async def async_update(self) -> None:
         """Do nothing. The shadow link pushes every value, so there is nothing to read."""
+
+
+class SiiPetCameraControlEntity(SiiPetCameraStateEntity):
+    """A camera device-state entity that can also send a control command.
+
+    It shows a pending value until the next reported state arrives, so the
+    control reacts at once even though the camera confirms over the shadow.
+    """
+
+    def __init__(self, entry: SiiPetConfigEntry, sn: str, key: str) -> None:
+        """Bind the entity to a camera and its control client."""
+        super().__init__(entry, sn, key)
+        self._control = entry.runtime_data.control
+        self._pending: Any = None
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        """A fresh reported state clears the pending value."""
+        self._pending = None
+        super()._handle_coordinator_update()
+
+    async def _async_send(
+        self, command: str, payload: dict[str, Any], optimistic: Any
+    ) -> None:
+        """Send a command, showing `optimistic` until the camera confirms."""
+        self._pending = optimistic
+        self.async_write_ha_state()
+        try:
+            await self._control.send(self.sn, command, payload)
+        except SiiPetError as err:
+            self._pending = None
+            self.async_write_ha_state()
+            raise HomeAssistantError(
+                translation_domain=DOMAIN, translation_key="control_failed"
+            ) from err
 
 
 @callback

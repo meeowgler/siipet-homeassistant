@@ -97,6 +97,17 @@ If the connection stays down for 15 minutes, the device state entities become un
 - A camera can stop reporting while Online stays on. Last report shows how old the data is.
 - The device state works for an invited account too.
 
+### Controls
+
+Each camera has fill-light controls, sent over SiiPet's realtime service:
+
+- **Night light brightness** (`select`): low, medium, or high.
+- **Auto fill light** (`switch`): let the camera turn the light on by itself.
+- **Night vision fill light** (`switch`): keep a dim light on in the dark.
+
+A change shows at once and the camera confirms it a moment later. If the camera
+is offline the change fails with an error, so try again when it is back.
+
 ### Removed cats and cameras
 
 When a cat or a camera leaves your SiiPet account, its entities become unavailable.

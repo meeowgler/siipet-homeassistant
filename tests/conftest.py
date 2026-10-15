@@ -54,6 +54,15 @@ def no_deprecated_calls(caplog: pytest.LogCaptureFixture) -> Generator[None]:
 
 
 @pytest.fixture(autouse=True)
+def mock_control() -> Generator[AsyncMock]:
+    """Replace the realtime control client, so tests send no command over a socket."""
+    with patch("custom_components.siipet.LrtmControl") as control_class:
+        control = control_class.return_value
+        control.send = AsyncMock()
+        yield control
+
+
+@pytest.fixture(autouse=True)
 def shadow_links() -> Generator[list[FakeShadowLink]]:
     """Replace the shadow link with a fake. The list holds each fake link."""
     links: list[FakeShadowLink] = []
