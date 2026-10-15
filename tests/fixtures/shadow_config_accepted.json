@@ -17,7 +17,8 @@
       "fillLight": {
         "level": 2,
         "brightness2": 70,
-        "autoLight": true
+        "autoLight": true,
+        "lowLight": true
       },
       "pir": {
         "level": 3,
