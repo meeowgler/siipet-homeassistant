@@ -29,6 +29,24 @@
       "update_mode": {
         "default": "mdi:update"
       }
+    },
+    "select": {
+      "fill_light_brightness": {
+        "default": "mdi:lightbulb-on-50",
+        "state": {
+          "low": "mdi:lightbulb-on-10",
+          "medium": "mdi:lightbulb-on-50",
+          "high": "mdi:lightbulb-on-90"
+        }
+      }
+    },
+    "switch": {
+      "auto_fill_light": {
+        "default": "mdi:lightbulb-auto-outline"
+      },
+      "night_vision": {
+        "default": "mdi:weather-night"
+      }
     }
   }
 }
