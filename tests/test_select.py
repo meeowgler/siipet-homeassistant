@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import replace
 from unittest.mock import AsyncMock
 
-from homeassistant.const import STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 import pytest
@@ -103,14 +102,14 @@ async def test_failed_command_raises_and_reverts(
     assert hass.states.get(SELECT).state == "medium"
 
 
-async def test_unavailable_without_state(
+async def test_absent_before_first_state(
     hass: HomeAssistant,
     mock_client: AsyncMock,
     config_entry: MockConfigEntry,
     shadow_links: list[FakeShadowLink],
 ) -> None:
-    """Before any reported state, the select is unavailable."""
+    """The select is created once the camera first reports, like the sensors."""
     await setup_integration(hass, config_entry)
     shadow_links[0].on_connection(True)
     await hass.async_block_till_done()
-    assert hass.states.get(SELECT).state == STATE_UNAVAILABLE
+    assert hass.states.get(SELECT) is None
