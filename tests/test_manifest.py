@@ -27,7 +27,7 @@ def test_manifest() -> None:
     assert manifest["requirements"] == []
     assert manifest["dependencies"] == ["http", "media_source", "websocket_api"]
     assert manifest["after_dependencies"] == ["frontend"]
-    assert manifest["version"] == "0.6.0"
+    assert manifest["version"] == "0.6.1"
 
 
 def test_hacs_minimum_version() -> None:
