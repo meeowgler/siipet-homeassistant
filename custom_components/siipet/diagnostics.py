@@ -13,6 +13,7 @@ from homeassistant.core import HomeAssistant
 from .const import (
     CONF_CLIENT_ID,
     CONF_MEDIA_DAYS,
+    CONF_PASSWORD_HASH,
     CONF_TOKEN,
     DEFAULT_MEDIA_DAYS,
     UNKNOWN_CAT_ID,
@@ -22,6 +23,7 @@ from .coordinator import SiiPetConfigEntry
 TO_REDACT = {
     CONF_CLIENT_ID,
     CONF_EMAIL,
+    CONF_PASSWORD_HASH,
     CONF_TOKEN,
     "AccessKeyId",
     "AgoraAuth",

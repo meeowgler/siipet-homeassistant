@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, MagicMock
 
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
+from homeassistant.const import CONF_EMAIL
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 import pytest
@@ -13,13 +14,16 @@ from pytest_homeassistant.common import MockConfigEntry
 from custom_components.siipet import async_remove_config_entry_device
 from custom_components.siipet.api import Session, SiiPetAuthError, SiiPetConnectionError
 from custom_components.siipet.const import (
+    AUTH_PASSWORD,
+    CONF_AUTH_METHOD,
     CONF_CLIENT_ID,
     CONF_EXPIRE_AT,
+    CONF_PASSWORD_HASH,
     CONF_TOKEN,
     DOMAIN,
 )
 
-from .common import setup_integration
+from .common import SECRET_HASH, setup_integration
 
 
 async def test_setup_and_unload(
@@ -153,3 +157,50 @@ async def test_remove_device_while_not_loaded(
         config_entry_id=config_entry.entry_id, identifiers={(DOMAIN, "pet-gone")}
     )
     assert await async_remove_config_entry_device(hass, config_entry, device) is False
+
+
+async def test_email_entry_has_no_password(
+    hass: HomeAssistant, mock_client_class: MagicMock, config_entry: MockConfigEntry
+) -> None:
+    """An email-code entry gives the client no password, so it cannot sign in again."""
+    await setup_integration(hass, config_entry)
+    assert mock_client_class.call_args.kwargs["password_hash"] is None
+
+
+async def test_password_entry_setup(
+    hass: HomeAssistant, mock_client_class: MagicMock, config_entry: MockConfigEntry
+) -> None:
+    """A password entry gives the client its email and password digest."""
+    hass.config_entries.async_update_entry(
+        config_entry,
+        data={
+            **config_entry.data,
+            CONF_AUTH_METHOD: AUTH_PASSWORD,
+            CONF_PASSWORD_HASH: SECRET_HASH,
+        },
+    )
+    await setup_integration(hass, config_entry)
+    assert config_entry.state is ConfigEntryState.LOADED
+    kwargs = mock_client_class.call_args.kwargs
+    assert kwargs["email"] == "cat@example.com"
+    assert kwargs["password_hash"] == SECRET_HASH
+
+
+async def test_password_relogin_is_saved(
+    hass: HomeAssistant, mock_client_class: MagicMock, config_entry: MockConfigEntry
+) -> None:
+    """A session from a new sign-in is written to the entry and keeps the digest."""
+    hass.config_entries.async_update_entry(
+        config_entry,
+        data={
+            **config_entry.data,
+            CONF_AUTH_METHOD: AUTH_PASSWORD,
+            CONF_PASSWORD_HASH: SECRET_HASH,
+        },
+    )
+    await setup_integration(hass, config_entry)
+    save = mock_client_class.call_args.kwargs["on_session_update"]
+    save(Session("signed-in-again", 1_900_000_000_000))
+    assert config_entry.data[CONF_TOKEN] == "signed-in-again"
+    assert config_entry.data[CONF_PASSWORD_HASH] == SECRET_HASH
+    assert config_entry.data[CONF_EMAIL] == "cat@example.com"

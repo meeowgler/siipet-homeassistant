@@ -45,14 +45,43 @@ Then, for either option, set up the integration:
 
 1. Select the button above, or go to **Settings > Devices & Services > Add Integration** and search for **SiiPet**.
 2. Enter the email address of your SiiPet account.
-3. Enter the code that SiiPet sends to that address.
+3. If the account has a password, enter it too. Home Assistant signs in, and SiiPet sends no code.
+4. Otherwise leave the password empty, and enter the code that SiiPet sends to that address.
+   To set a password for the account, also enter a new password on this step.
 
-The session renews automatically. If SiiPet ends the session, Home Assistant asks you to sign in again with an email code.
+The session renews automatically.
+If SiiPet ends the session, Home Assistant asks you to sign in again.
+Without a password, this sign-in needs a new email code.
 
 To sign in again at any other time, open the SiiPet entry in **Settings > Devices & Services** and choose **Reconfigure**.
 Use the same SiiPet account. The devices, entities, and dashboards stay as they are.
 
 SiiPet limits how many sign-in codes it sends per day. If it refuses, try again the next day.
+
+### Sign in with a password
+
+A sign-in to the same account somewhere else, such as the phone app, can end the session of Home Assistant.
+After an email-code sign-in, Home Assistant then asks for a new code.
+SiiPet sends only a few codes per day, so a few ended sessions on one day can leave Home Assistant signed out until the next day.
+
+With a password, Home Assistant signs in again by itself when SiiPet ends the session.
+After it signs in again, it waits 15 minutes before the next time,
+so that it does not keep ending the session of another device that uses the same account.
+For the same reason, use an account that only Home Assistant uses, such as an invited account.
+If SiiPet ends the session again within these 15 minutes, or rejects the password, Home Assistant asks you to sign in again.
+With a password, this sign-in needs no code.
+
+The SiiPet app has no setting for a password.
+To set one, leave the password empty, and enter a new password together with the code.
+SiiPet does not send the password to you, so keep it somewhere safe.
+The app cannot change or remove the password.
+To change it, choose **Reconfigure**, leave the password empty, and enter a new password together with the code.
+
+A password lets anyone who knows it sign in to the account without access to your email.
+Use a strong password that you do not use for other accounts.
+Home Assistant stores only a SHA-256 hash of the password in the SiiPet entry.
+SiiPet accepts this hash as the password, so keep your Home Assistant backups safe.
+The diagnostics do not include the hash.
 
 ## Devices and entities
 

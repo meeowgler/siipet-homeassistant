@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import date, time
 from typing import Any
 from unittest.mock import patch
@@ -12,6 +12,7 @@ import aiohttp
 import pytest
 from pytest_homeassistant.test_util.aiohttp import (
     AiohttpClientMocker,
+    AiohttpClientMockResponse,
 )
 from yarl import URL
 
@@ -23,9 +24,9 @@ from custom_components.siipet.api import (
     SiiPetConnectionError,
     SiiPetError,
 )
-from custom_components.siipet.api.client import BASE_URL
+from custom_components.siipet.api.client import BASE_URL, RELOGIN_COOLDOWN_MS
 
-from ..common import load_data, load_fixture
+from ..common import SECRET_HASH, load_data, load_fixture, make_token
 
 NOW_MS = 1_790_424_000_000  # 2026-09-26T12:00:00Z
 TOKEN = load_data("login.json")["Token"]
@@ -61,6 +62,8 @@ def make_client(
     websession: aiohttp.ClientSession,
     session: Session | None = FRESH,
     updates: list[Session] | None = None,
+    password_hash: str | None = None,
+    clock: Callable[[], float] | None = None,
 ) -> SiiPetClient:
     return SiiPetClient(
         websession,
@@ -68,8 +71,31 @@ def make_client(
         time_zone="Europe/Warsaw",
         session=session,
         on_session_update=updates.append if updates is not None else None,
-        clock=lambda: NOW_MS / 1000,
+        email="cat@example.com" if password_hash is not None else None,
+        password_hash=password_hash,
+        clock=clock or (lambda: NOW_MS / 1000),
     )
+
+
+def sequence(*responses: dict[str, Any]) -> Callable[..., Any]:
+    """Answer with each JSON body in turn, then repeat the last one."""
+    remaining = list(responses)
+
+    async def side_effect(
+        method: str, url: URL, data: Any
+    ) -> AiohttpClientMockResponse:
+        body = remaining.pop(0) if len(remaining) > 1 else remaining[0]
+        return AiohttpClientMockResponse(method, url, json=body)
+
+    return side_effect
+
+
+ENDED = {"Code": -2, "Msg": "token illegal", "Data": None}
+NEW_LOGIN = {"Code": 0, "Msg": "success", "Data": load_data("token_refresh.json")}
+NEW_SESSION = Session(
+    load_data("token_refresh.json")["Token"],
+    load_data("token_refresh.json")["ExpireAt"],
+)
 
 
 async def test_headers_and_envelope(
@@ -596,3 +622,284 @@ async def test_renewal_auth_error_raises(
     aioclient_mock.post(url("user/token/refresh"), status=401)
     with pytest.raises(SiiPetAuthError):
         await make_client(websession, session=DUE).get_cats()
+
+
+async def test_login_with_password(
+    websession: aiohttp.ClientSession, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Password sign-in sends the digest as it is and no token, and keeps the session."""
+    aioclient_mock.post(url("user/email/login"), json=load_fixture("login.json"))
+    client = make_client(websession, session=None)
+    session = await client.login_with_password("cat@example.com", SECRET_HASH)
+    [(body, headers)] = calls(aioclient_mock, "user/email/login")
+    assert body == {"Email": "cat@example.com", "Password": SECRET_HASH}
+    assert "authorization" not in headers
+    assert session.user_id == "user-0001"
+    assert client.session == session
+
+
+async def test_login_with_password_rejected(
+    websession: aiohttp.ClientSession, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """An account without a password answers with Code 10003."""
+    aioclient_mock.post(
+        url("user/email/login"),
+        json={"Code": 10003, "Msg": "not register", "Data": None},
+    )
+    client = make_client(websession, session=None)
+    with pytest.raises(SiiPetApiError) as err:
+        await client.login_with_password("cat@example.com", SECRET_HASH)
+    assert err.value.code == 10003
+
+
+async def test_set_password(
+    websession: aiohttp.ClientSession, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Setting a password sends the code and the digest as it is, and no token."""
+    aioclient_mock.post(url("user/email/reset"), json=OK_EMPTY)
+    client = make_client(websession, session=None)
+    await client.set_password("cat@example.com", "012345", SECRET_HASH)
+    [(body, headers)] = calls(aioclient_mock, "user/email/reset")
+    assert body == {
+        "Code": "012345",
+        "Email": "cat@example.com",
+        "Password": SECRET_HASH,
+    }
+    assert "authorization" not in headers
+    assert client.session is None
+
+
+async def test_relogin_with_password(
+    websession: aiohttp.ClientSession, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """An ended session signs in again with the password and repeats the call once."""
+    updates: list[Session] = []
+    aioclient_mock.post(
+        url("user/pet/sync"),
+        side_effect=sequence(ENDED, load_fixture("pet_sync.json")),
+    )
+    aioclient_mock.post(url("user/email/login"), json=NEW_LOGIN)
+    client = make_client(websession, updates=updates, password_hash=SECRET_HASH)
+    assert await client.get_cats()
+    [(login_body, _headers)] = calls(aioclient_mock, "user/email/login")
+    assert login_body["Password"] == SECRET_HASH
+    first, second = calls(aioclient_mock, "user/pet/sync")
+    assert first[1]["authorization"] == f"Bearer {TOKEN}"
+    assert second[1]["authorization"] == f"Bearer {NEW_SESSION.token}"
+    assert updates == [NEW_SESSION]
+    assert client.session == NEW_SESSION
+
+
+async def test_no_relogin_without_password(
+    websession: aiohttp.ClientSession, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Without a password, an ended session raises and nothing signs in."""
+    aioclient_mock.post(url("user/pet/sync"), json=ENDED)
+    with pytest.raises(SiiPetAuthError):
+        await make_client(websession).get_cats()
+    assert calls(aioclient_mock, "user/email/login") == []
+
+
+async def test_relogin_rejected_raises_auth_error(
+    websession: aiohttp.ClientSession, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """When SiiPet rejects the password, the call raises SiiPetAuthError."""
+    updates: list[Session] = []
+    aioclient_mock.post(url("user/pet/sync"), json=ENDED)
+    aioclient_mock.post(
+        url("user/email/login"),
+        json={"Code": 10003, "Msg": "not register", "Data": None},
+    )
+    client = make_client(websession, updates=updates, password_hash=SECRET_HASH)
+    with pytest.raises(SiiPetAuthError):
+        await client.get_cats()
+    assert len(calls(aioclient_mock, "user/email/login")) == 1
+    assert updates == []
+
+
+async def test_relogin_connection_error_is_not_an_auth_error(
+    websession: aiohttp.ClientSession, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """A network failure during the new sign-in stays a connection error."""
+    aioclient_mock.post(url("user/pet/sync"), json=ENDED)
+    aioclient_mock.post(url("user/email/login"), exc=aiohttp.ClientConnectionError())
+    with pytest.raises(SiiPetConnectionError):
+        await make_client(websession, password_hash=SECRET_HASH).get_cats()
+
+
+async def test_relogin_waits_after_a_sign_in(
+    websession: aiohttp.ClientSession, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """After one new sign-in, ended sessions raise until the cooldown passes."""
+    now = [NOW_MS / 1000]
+    aioclient_mock.post(url("user/pet/sync"), json=ENDED)
+    aioclient_mock.post(url("user/email/login"), json=NEW_LOGIN)
+    client = make_client(websession, password_hash=SECRET_HASH, clock=lambda: now[0])
+
+    with pytest.raises(SiiPetAuthError):
+        await client.get_cats()
+    assert len(calls(aioclient_mock, "user/email/login")) == 1
+
+    now[0] += RELOGIN_COOLDOWN_MS / 1000 - 1
+    with pytest.raises(SiiPetAuthError):
+        await client.get_cats()
+    assert len(calls(aioclient_mock, "user/email/login")) == 1
+
+    now[0] += 1
+    with pytest.raises(SiiPetAuthError):
+        await client.get_cats()
+    assert len(calls(aioclient_mock, "user/email/login")) == 2
+
+
+async def test_relogin_after_rejected_renewal(
+    websession: aiohttp.ClientSession, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """A renewal that SiiPet rejects signs in again with the password."""
+    updates: list[Session] = []
+    aioclient_mock.post(url("user/token/refresh"), status=401)
+    aioclient_mock.post(url("user/email/login"), json=NEW_LOGIN)
+    aioclient_mock.post(url("user/pet/sync"), json=load_fixture("pet_sync.json"))
+    client = make_client(
+        websession, session=DUE, updates=updates, password_hash=SECRET_HASH
+    )
+    await client.get_cats()
+    [(_body, sync_headers)] = calls(aioclient_mock, "user/pet/sync")
+    assert sync_headers["authorization"] == f"Bearer {NEW_SESSION.token}"
+    assert updates == [NEW_SESSION]
+
+
+async def test_one_relogin_for_parallel_calls(
+    websession: aiohttp.ClientSession, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Parallel calls on an ended session sign in once."""
+    signed_in: list[bool] = []
+
+    async def login(method: str, url: URL, data: Any) -> AiohttpClientMockResponse:
+        # Yield, so that the other calls fail and wait while this sign-in runs.
+        for _ in range(5):
+            await asyncio.sleep(0)
+        signed_in.append(True)
+        return AiohttpClientMockResponse(method, url, json=NEW_LOGIN)
+
+    async def pet_sync(method: str, url: URL, data: Any) -> AiohttpClientMockResponse:
+        body = load_fixture("pet_sync.json") if signed_in else ENDED
+        return AiohttpClientMockResponse(method, url, json=body)
+
+    aioclient_mock.post(url("user/pet/sync"), side_effect=pet_sync)
+    aioclient_mock.post(url("user/email/login"), side_effect=login)
+    client = make_client(websession, password_hash=SECRET_HASH)
+    results = await asyncio.gather(
+        client.get_cats(), client.get_cats(), client.get_cats()
+    )
+    assert all(results)
+    assert len(calls(aioclient_mock, "user/email/login")) == 1
+
+
+async def test_relogin_retries_after_a_connection_error(
+    websession: aiohttp.ClientSession, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """A sign-in that fails on the network starts no wait, so the next call signs in."""
+    attempts: list[int] = []
+
+    async def login(method: str, url: URL, data: Any) -> AiohttpClientMockResponse:
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise aiohttp.ClientConnectionError
+        return AiohttpClientMockResponse(method, url, json=NEW_LOGIN)
+
+    aioclient_mock.post(
+        url("user/pet/sync"),
+        side_effect=sequence(ENDED, ENDED, load_fixture("pet_sync.json")),
+    )
+    aioclient_mock.post(url("user/email/login"), side_effect=login)
+    client = make_client(websession, password_hash=SECRET_HASH)
+    with pytest.raises(SiiPetConnectionError):
+        await client.get_cats()
+    assert await client.get_cats()
+    assert len(attempts) == 2
+
+
+async def renewal_during_relogin(
+    websession: aiohttp.ClientSession,
+    aioclient_mock: AiohttpClientMocker,
+    refresh: dict[str, Any],
+) -> tuple[SiiPetClient, list[Session], asyncio.Task[Any]]:
+    """Answer a renewal of the old token after another call signed in again.
+
+    The first call sends with the old token before the renewal is due. While a
+    second call waits for its renewal, SiiPet ends the first session, and the
+    first call signs in again with the password. Then the renewal answers with
+    `refresh`. Return the client, its session updates, and the second call.
+    """
+    now = [NOW_MS / 1000]
+    updates: list[Session] = []
+    first_sent, end_first = asyncio.Event(), asyncio.Event()
+    refresh_sent, answer_refresh = asyncio.Event(), asyncio.Event()
+
+    async def pet_sync(method: str, url: URL, data: Any) -> AiohttpClientMockResponse:
+        if not first_sent.is_set():
+            first_sent.set()
+            await end_first.wait()
+            return AiohttpClientMockResponse(method, url, json=ENDED)
+        return AiohttpClientMockResponse(
+            method, url, json=load_fixture("pet_sync.json")
+        )
+
+    async def token_refresh(
+        method: str, url: URL, data: Any
+    ) -> AiohttpClientMockResponse:
+        refresh_sent.set()
+        await answer_refresh.wait()
+        return AiohttpClientMockResponse(method, url, **refresh)
+
+    aioclient_mock.post(url("user/pet/sync"), side_effect=pet_sync)
+    aioclient_mock.post(url("user/token/refresh"), side_effect=token_refresh)
+    aioclient_mock.post(url("user/email/login"), json=NEW_LOGIN)
+    client = make_client(
+        websession,
+        session=Session(TOKEN, NOW_MS + 2 * 86_400_000),
+        updates=updates,
+        password_hash=SECRET_HASH,
+        clock=lambda: now[0],
+    )
+    first = asyncio.create_task(client.get_cats())
+    await first_sent.wait()
+    now[0] += 36 * 3600
+    second = asyncio.create_task(client.get_cats())
+    await refresh_sent.wait()
+    end_first.set()
+    assert await first
+    answer_refresh.set()
+    return client, updates, second
+
+
+async def test_rejected_renewal_after_relogin_keeps_new_session(
+    websession: aiohttp.ClientSession, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """A renewal rejected after another call signed in again uses the new session."""
+    client, updates, second = await renewal_during_relogin(
+        websession, aioclient_mock, {"status": 401}
+    )
+    assert await second
+    assert client.session == NEW_SESSION
+    assert updates == [NEW_SESSION]
+    assert len(calls(aioclient_mock, "user/email/login")) == 1
+    last_sync = calls(aioclient_mock, "user/pet/sync")[-1]
+    assert last_sync[1]["authorization"] == f"Bearer {NEW_SESSION.token}"
+
+
+async def test_late_renewal_keeps_session_of_relogin(
+    websession: aiohttp.ClientSession, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """A renewal of the old token that answers after a new sign-in is dropped."""
+    renewed = {"Token": make_token("user-0001"), "ExpireAt": NOW_MS + 30 * 86_400_000}
+    client, updates, second = await renewal_during_relogin(
+        websession,
+        aioclient_mock,
+        {"json": {"Code": 0, "Msg": "success", "Data": renewed}},
+    )
+    assert await second
+    assert client.session == NEW_SESSION
+    assert updates == [NEW_SESSION]
+    last_sync = calls(aioclient_mock, "user/pet/sync")[-1]
+    assert last_sync[1]["authorization"] == f"Bearer {NEW_SESSION.token}"

@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import Awaitable, Callable, Generator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 import uuid
 
 from homeassistant.config_entries import SOURCE_USER
-from homeassistant.const import CONF_EMAIL
+from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType, InvalidData
 import pytest
@@ -21,18 +21,22 @@ from custom_components.siipet.api import (
     SiiPetConnectionError,
     SiiPetError,
 )
+from custom_components.siipet.api.client import WRONG_CODE
 from custom_components.siipet.const import (
     AUTH_EMAIL,
+    AUTH_PASSWORD,
     CONF_AUTH_METHOD,
     CONF_CLIENT_ID,
     CONF_CODE,
     CONF_EXPIRE_AT,
     CONF_MEDIA_DAYS,
+    CONF_NEW_PASSWORD,
+    CONF_PASSWORD_HASH,
     CONF_TOKEN,
     DOMAIN,
 )
 
-from .common import load_data, make_token
+from .common import SECRET_HASH, load_data, make_token
 
 LOGIN = load_data("login.json")
 NEW_TOKEN = make_token("user-0001", exp=1_795_000_000)
@@ -468,3 +472,302 @@ async def test_options_flow_rejects_days_out_of_range(
             result["flow_id"], {CONF_MEDIA_DAYS: days}
         )
     assert config_entry.options == before
+
+
+@pytest.fixture
+def password_login(mock_client: AsyncMock) -> AsyncMock:
+    """Password sign-in returns the session of the fixture account."""
+    mock_client.login_with_password.return_value = Session(
+        LOGIN["Token"], LOGIN["ExpireAt"]
+    )
+    return mock_client
+
+
+async def test_password_sign_in(
+    hass: HomeAssistant, mock_client_class: MagicMock, password_login: AsyncMock
+) -> None:
+    """Email and password create an entry, and no code is requested."""
+    flow_id = await _start(hass)
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_EMAIL: " cat@example.com ", CONF_PASSWORD: "secret-1"}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["result"].unique_id == "user-0001"
+    data = result["data"]
+    assert data[CONF_AUTH_METHOD] == AUTH_PASSWORD
+    assert data[CONF_EMAIL] == "cat@example.com"
+    assert data[CONF_PASSWORD_HASH] == SECRET_HASH
+    assert CONF_PASSWORD not in data
+    assert data[CONF_TOKEN] == LOGIN["Token"]
+    assert data[CONF_EXPIRE_AT] == LOGIN["ExpireAt"]
+    assert _client_ids(mock_client_class) == {data[CONF_CLIENT_ID]}
+    password_login.login_with_password.assert_awaited_once_with(
+        "cat@example.com", SECRET_HASH
+    )
+    password_login.request_email_code.assert_not_awaited()
+    password_login.get_cats.assert_awaited_once()
+
+
+@pytest.mark.parametrize(
+    ("side_effect", "error"),
+    [
+        (SiiPetApiError(10003, "not register"), "invalid_auth"),
+        (SiiPetAuthError("rejected"), "invalid_auth"),
+        (SiiPetConnectionError("down"), "cannot_connect"),
+        (SiiPetError("odd"), "unknown"),
+    ],
+)
+async def test_password_sign_in_errors(
+    hass: HomeAssistant,
+    password_login: AsyncMock,
+    side_effect: Exception,
+    error: str,
+) -> None:
+    """A failed password sign-in shows an error and does not suggest the password."""
+    password_login.login_with_password.side_effect = side_effect
+    flow_id = await _start(hass)
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_EMAIL: "cat@example.com", CONF_PASSWORD: "secret-1"}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "email"
+    assert result["errors"] == {"base": error}
+    assert _suggested(result, CONF_EMAIL) == "cat@example.com"
+    assert _suggested(result, CONF_PASSWORD) is None
+    password_login.request_email_code.assert_not_awaited()
+
+
+async def test_password_session_rejected(
+    hass: HomeAssistant, password_login: AsyncMock
+) -> None:
+    """A password session that cannot read the cats creates no entry."""
+    password_login.get_cats.side_effect = SiiPetAuthError("rejected")
+    flow_id = await _start(hass)
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_EMAIL: "cat@example.com", CONF_PASSWORD: "secret-1"}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["errors"] == {"base": "session_rejected"}
+
+
+async def test_set_password_with_code(
+    hass: HomeAssistant, password_login: AsyncMock
+) -> None:
+    """A new password at the code step is set with the code, then used to sign in."""
+    flow_id = await _start(hass)
+    await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_EMAIL: "cat@example.com"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_CODE: " 012345 ", CONF_NEW_PASSWORD: "secret-1"}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    data = result["data"]
+    assert data[CONF_AUTH_METHOD] == AUTH_PASSWORD
+    assert data[CONF_PASSWORD_HASH] == SECRET_HASH
+    assert CONF_PASSWORD not in data
+    password_login.set_password.assert_awaited_once_with(
+        "cat@example.com", "012345", SECRET_HASH
+    )
+    password_login.login_with_password.assert_awaited_once_with(
+        "cat@example.com", SECRET_HASH
+    )
+    password_login.login.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    ("side_effect", "errors"),
+    [
+        (SiiPetApiError(WRONG_CODE, "wrong code"), {CONF_CODE: "invalid_code"}),
+        (SiiPetApiError(40000, "rejected"), {"base": "set_password_failed"}),
+        (SiiPetConnectionError("down"), {"base": "cannot_connect"}),
+        (SiiPetError("odd"), {"base": "unknown"}),
+    ],
+)
+async def test_set_password_errors(
+    hass: HomeAssistant,
+    password_login: AsyncMock,
+    side_effect: Exception,
+    errors: dict[str, str],
+) -> None:
+    """A failed password change shows an error and does not sign in."""
+    password_login.set_password.side_effect = side_effect
+    flow_id = await _start(hass)
+    await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_EMAIL: "cat@example.com"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_CODE: "012345", CONF_NEW_PASSWORD: "secret-1"}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "code"
+    assert result["errors"] == errors
+    password_login.login_with_password.assert_not_awaited()
+
+
+async def test_new_password_sign_in_rejected(
+    hass: HomeAssistant, password_login: AsyncMock
+) -> None:
+    """When the new password is set but the sign-in with it fails, the form shows it."""
+    password_login.login_with_password.side_effect = SiiPetApiError(10003, "no")
+    flow_id = await _start(hass)
+    await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_EMAIL: "cat@example.com"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_CODE: "012345", CONF_NEW_PASSWORD: "secret-1"}
+    )
+    assert result["step_id"] == "code"
+    assert result["errors"] == {"base": "invalid_auth"}
+
+
+async def test_reauth_with_password(
+    hass: HomeAssistant,
+    mock_client_class: MagicMock,
+    password_login: AsyncMock,
+    config_entry: MockConfigEntry,
+) -> None:
+    """Reauth with a password stores the password and keeps the client id."""
+    password_login.login_with_password.return_value = Session(
+        NEW_TOKEN, 1_800_000_000_000
+    )
+    result = await _start_reauth(hass, config_entry)
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"], {CONF_EMAIL: "cat@example.com", CONF_PASSWORD: "secret-1"}
+    )
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "reauth_successful"
+    assert config_entry.data[CONF_AUTH_METHOD] == AUTH_PASSWORD
+    assert config_entry.data[CONF_PASSWORD_HASH] == SECRET_HASH
+    assert CONF_PASSWORD not in config_entry.data
+    assert config_entry.data[CONF_TOKEN] == NEW_TOKEN
+    assert config_entry.data[CONF_CLIENT_ID] == "client-uuid-0001"
+    assert _client_ids(mock_client_class) == {"client-uuid-0001"}
+
+
+async def test_reconfigure_password_entry_to_code(
+    hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
+) -> None:
+    """Signing in with a code removes the stored password."""
+    hass.config_entries.async_update_entry(
+        config_entry,
+        data={
+            **config_entry.data,
+            CONF_AUTH_METHOD: AUTH_PASSWORD,
+            CONF_PASSWORD_HASH: SECRET_HASH,
+        },
+    )
+    mock_client.login.return_value = Session(NEW_TOKEN, 1_800_000_000_000)
+    result = await _start_reconfigure(hass, config_entry)
+    assert _suggested(result, CONF_PASSWORD) is None
+
+    result = await _sign_in(hass, result["flow_id"])
+    assert result["reason"] == "reconfigure_successful"
+    assert config_entry.data[CONF_AUTH_METHOD] == AUTH_EMAIL
+    assert CONF_PASSWORD_HASH not in config_entry.data
+    assert config_entry.data[CONF_TOKEN] == NEW_TOKEN
+
+
+@pytest.mark.parametrize("start", [_start_reauth, _start_reconfigure])
+async def test_new_password_for_another_email_aborts(
+    hass: HomeAssistant,
+    password_login: AsyncMock,
+    config_entry: MockConfigEntry,
+    start: Callable[[HomeAssistant, MockConfigEntry], Awaitable[dict[str, Any]]],
+) -> None:
+    """A new password for another address aborts before it changes that account."""
+    result = await start(hass, config_entry)
+    flow_id = result["flow_id"]
+    await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_EMAIL: "dog@example.com"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_CODE: "012345", CONF_NEW_PASSWORD: "secret-1"}
+    )
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "wrong_account"
+    password_login.set_password.assert_not_awaited()
+    assert CONF_PASSWORD_HASH not in config_entry.data
+
+
+async def test_new_password_in_reauth_ignores_email_case(
+    hass: HomeAssistant, password_login: AsyncMock, config_entry: MockConfigEntry
+) -> None:
+    """Reauth sets a new password when the address differs from the entry only in case."""
+    result = await _start_reauth(hass, config_entry)
+    flow_id = result["flow_id"]
+    await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_EMAIL: "Cat@Example.com"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_CODE: "012345", CONF_NEW_PASSWORD: "secret-1"}
+    )
+    assert result["reason"] == "reauth_successful"
+    password_login.set_password.assert_awaited_once_with(
+        "Cat@Example.com", "012345", SECRET_HASH
+    )
+    assert config_entry.data[CONF_PASSWORD_HASH] == SECRET_HASH
+
+
+async def test_new_password_retry_only_signs_in(
+    hass: HomeAssistant, password_login: AsyncMock
+) -> None:
+    """After the code set the password, a retry of the same form only signs in."""
+    password_login.login_with_password.side_effect = [
+        SiiPetConnectionError("down"),
+        Session(LOGIN["Token"], LOGIN["ExpireAt"]),
+    ]
+    flow_id = await _start(hass)
+    await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_EMAIL: "cat@example.com"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_CODE: "012345", CONF_NEW_PASSWORD: "secret-1"}
+    )
+    assert result["errors"] == {"base": "cannot_connect"}
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_CODE: "012345", CONF_NEW_PASSWORD: "secret-1"}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_PASSWORD_HASH] == SECRET_HASH
+    password_login.set_password.assert_awaited_once()
+    assert password_login.login_with_password.await_count == 2
+
+
+@pytest.mark.parametrize(
+    ("start", "reason"),
+    [
+        (_start_reauth, "reauth_successful"),
+        (_start_reconfigure, "reconfigure_successful"),
+    ],
+)
+async def test_new_password_for_token_entry_needs_code_sign_in(
+    hass: HomeAssistant,
+    password_login: AsyncMock,
+    token_entry: MockConfigEntry,
+    start: Callable[[HomeAssistant, MockConfigEntry], Awaitable[dict[str, Any]]],
+    reason: str,
+) -> None:
+    """An entry without an address gets no new password, and the code alone signs in."""
+    password_login.login.return_value = Session(NEW_TOKEN, 1_800_000_000_000)
+    result = await start(hass, token_entry)
+    flow_id = result["flow_id"]
+    await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_EMAIL: "cat@example.com"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_CODE: "012345", CONF_NEW_PASSWORD: "secret-1"}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "code"
+    assert result["errors"] == {CONF_NEW_PASSWORD: "new_password_needs_email"}
+    password_login.set_password.assert_not_awaited()
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_CODE: "012345"}
+    )
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == reason
+    assert token_entry.data[CONF_EMAIL] == "cat@example.com"
+    assert CONF_PASSWORD_HASH not in token_entry.data

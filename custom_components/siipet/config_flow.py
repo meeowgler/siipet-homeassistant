@@ -15,7 +15,7 @@ from homeassistant.config_entries import (
     ConfigFlowResult,
     OptionsFlowWithReload,
 )
-from homeassistant.const import CONF_EMAIL
+from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import callback
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.selector import (
@@ -35,16 +35,20 @@ from .api import (
     SiiPetClient,
     SiiPetConnectionError,
     SiiPetError,
+    hash_password,
 )
 from .api.client import TOO_MANY_REQUESTS, WRONG_CODE
 from .const import (
     AUTH_EMAIL,
+    AUTH_PASSWORD,
     AUTH_TOKEN,
     CONF_AUTH_METHOD,
     CONF_CLIENT_ID,
     CONF_CODE,
     CONF_EXPIRE_AT,
     CONF_MEDIA_DAYS,
+    CONF_NEW_PASSWORD,
+    CONF_PASSWORD_HASH,
     CONF_TOKEN,
     DEFAULT_MEDIA_DAYS,
     DOMAIN,
@@ -58,14 +62,24 @@ EMAIL_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_EMAIL): TextSelector(
             TextSelectorConfig(type=TextSelectorType.EMAIL, autocomplete="email")
-        )
+        ),
+        vol.Optional(CONF_PASSWORD): TextSelector(
+            TextSelectorConfig(
+                type=TextSelectorType.PASSWORD, autocomplete="current-password"
+            )
+        ),
     }
 )
 CODE_SCHEMA = vol.Schema(
     {
         vol.Required(CONF_CODE): TextSelector(
             TextSelectorConfig(autocomplete="one-time-code")
-        )
+        ),
+        vol.Optional(CONF_NEW_PASSWORD): TextSelector(
+            TextSelectorConfig(
+                type=TextSelectorType.PASSWORD, autocomplete="new-password"
+            )
+        ),
     }
 )
 
@@ -88,7 +102,7 @@ OPTIONS_SCHEMA = vol.Schema(
 
 
 class SiiPetConfigFlow(ConfigFlow, domain=DOMAIN):
-    """Sign in to a SiiPet account with an emailed code."""
+    """Sign in to a SiiPet account with a password or an emailed code."""
 
     VERSION = 1
 
@@ -102,6 +116,8 @@ class SiiPetConfigFlow(ConfigFlow, domain=DOMAIN):
         """Start a flow with a new client identifier."""
         self._email = ""
         self._client_id = str(uuid.uuid4())
+        # The digest that the code of this flow already set on the account.
+        self._password_set: str | None = None
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -112,21 +128,34 @@ class SiiPetConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_email(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Ask for the email address and request a code."""
+        """Ask for the email address. Sign in with the password, or request a code."""
         errors: dict[str, str] = {}
         if user_input is not None:
             email = user_input[CONF_EMAIL].strip()
+            password = user_input.get(CONF_PASSWORD) or ""
             if "@" not in email:
                 errors[CONF_EMAIL] = "invalid_email"
+            elif password:
+                self._email = email
+                password_hash = hash_password(password)
+                signed_in, errors = await self._async_password_sign_in(
+                    self._client(), password_hash
+                )
+                if signed_in is not None:
+                    return await self._async_finish(
+                        *signed_in, password_hash=password_hash
+                    )
             else:
                 errors = await self._async_request_code(email)
-            if not errors:
-                self._email = email
-                return await self.async_step_code()
+                if not errors:
+                    self._email = email
+                    return await self.async_step_code()
+        # Suggest the address again, never the password.
+        email_value = user_input[CONF_EMAIL] if user_input else self._email
         return self.async_show_form(
             step_id="email",
             data_schema=self.add_suggested_values_to_schema(
-                EMAIL_SCHEMA, user_input or {CONF_EMAIL: self._email}
+                EMAIL_SCHEMA, {CONF_EMAIL: email_value}
             ),
             errors=errors,
         )
@@ -134,9 +163,32 @@ class SiiPetConfigFlow(ConfigFlow, domain=DOMAIN):
     async def async_step_code(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Ask for the emailed code and sign in."""
+        """Ask for the emailed code and sign in.
+
+        With a new password, the code sets the account password first, and
+        the sign-in uses that password. A retry with the same password only
+        signs in.
+        """
         errors: dict[str, str] = {}
-        if user_input is not None:
+        new_password = (user_input or {}).get(CONF_NEW_PASSWORD) or ""
+        if user_input is not None and new_password:
+            # The reset changes the account at once, but the user id check
+            # in _async_finish comes after it. So reauth and reconfigure set
+            # a password only for the address that the entry stores.
+            entry = self._entry_to_sign_in_again()
+            if entry is not None and CONF_EMAIL not in entry.data:
+                errors[CONF_NEW_PASSWORD] = "new_password_needs_email"
+            elif entry is not None and (
+                entry.data[CONF_EMAIL].casefold() != self._email.casefold()
+            ):
+                return self.async_abort(reason="wrong_account")
+            else:
+                result, errors = await self._async_set_password_and_sign_in(
+                    user_input[CONF_CODE].strip(), new_password
+                )
+                if result is not None:
+                    return result
+        elif user_input is not None:
             client = self._client()
             try:
                 session = await client.login(self._email, user_input[CONF_CODE].strip())
@@ -192,6 +244,14 @@ class SiiPetConfigFlow(ConfigFlow, domain=DOMAIN):
             self._client_id = entry_data[CONF_CLIENT_ID]
         return await self.async_step_email()
 
+    def _entry_to_sign_in_again(self) -> ConfigEntry | None:
+        """Return the entry of a reauth or reconfigure flow, or None."""
+        if self.source == SOURCE_REAUTH:
+            return self._get_reauth_entry()
+        if self.source == SOURCE_RECONFIGURE:
+            return self._get_reconfigure_entry()
+        return None
+
     async def _async_request_code(self, email: str) -> dict[str, str]:
         """Request an email code. Return form errors."""
         try:
@@ -205,6 +265,67 @@ class SiiPetConfigFlow(ConfigFlow, domain=DOMAIN):
             return {"base": "code_request_failed"}
         except SiiPetError:
             _LOGGER.exception("Unexpected code request response")
+            return {"base": "unknown"}
+        return {}
+
+    async def _async_password_sign_in(
+        self, client: SiiPetClient, password_hash: str
+    ) -> tuple[tuple[Session, str] | None, dict[str, str]]:
+        """Sign in with the password digest and check the session.
+
+        Return the session and its user id, or None and the form errors.
+        """
+        try:
+            session = await client.login_with_password(self._email, password_hash)
+            user_id = session.user_id
+        except SiiPetConnectionError:
+            return None, {"base": "cannot_connect"}
+        except (SiiPetApiError, SiiPetAuthError) as err:
+            # SiiPet answers 10003 both for an unknown address and for an
+            # account without a password.
+            _LOGGER.debug("Password sign-in rejected: %s", err)
+            return None, {"base": "invalid_auth"}
+        except SiiPetError:
+            _LOGGER.exception("Unexpected password sign-in response")
+            return None, {"base": "unknown"}
+        if errors := await self._async_check_session(client):
+            return None, errors
+        return (session, user_id), {}
+
+    async def _async_set_password_and_sign_in(
+        self, code: str, password: str
+    ) -> tuple[ConfigFlowResult | None, dict[str, str]]:
+        """Set the password with the code, then sign in with it.
+
+        Return the flow result, or None and the form errors. A retry with the
+        same password only signs in.
+        """
+        client = self._client()
+        password_hash = hash_password(password)
+        if password_hash != self._password_set:
+            if errors := await self._async_set_password(client, code, password_hash):
+                return None, errors
+            self._password_set = password_hash
+        signed_in, errors = await self._async_password_sign_in(client, password_hash)
+        if signed_in is None:
+            return None, errors
+        return await self._async_finish(*signed_in, password_hash=password_hash), {}
+
+    async def _async_set_password(
+        self, client: SiiPetClient, code: str, password_hash: str
+    ) -> dict[str, str]:
+        """Set the account password with the emailed code. Return form errors."""
+        try:
+            await client.set_password(self._email, code, password_hash)
+        except SiiPetConnectionError:
+            return {"base": "cannot_connect"}
+        except SiiPetApiError as err:
+            if err.code == WRONG_CODE:
+                return {CONF_CODE: "invalid_code"}
+            _LOGGER.debug("Password change rejected: %s", err)
+            return {"base": "set_password_failed"}
+        except SiiPetError:
+            _LOGGER.exception("Unexpected password change response")
             return {"base": "unknown"}
         return {}
 
@@ -224,16 +345,24 @@ class SiiPetConfigFlow(ConfigFlow, domain=DOMAIN):
             return {"base": "unknown"}
         return {}
 
-    async def _async_finish(self, session: Session, user_id: str) -> ConfigFlowResult:
-        """Create the entry, or update it during reauth or reconfigure."""
+    async def _async_finish(
+        self, session: Session, user_id: str, *, password_hash: str | None = None
+    ) -> ConfigFlowResult:
+        """Create the entry, or update it during reauth or reconfigure.
+
+        With a password digest, the entry stores it, so that the client can sign
+        in again by itself. A code sign-in removes a stored digest.
+        """
         await self.async_set_unique_id(user_id)
         data = {
-            CONF_AUTH_METHOD: AUTH_EMAIL,
+            CONF_AUTH_METHOD: AUTH_PASSWORD if password_hash else AUTH_EMAIL,
             CONF_EMAIL: self._email,
             CONF_TOKEN: session.token,
             CONF_EXPIRE_AT: session.expire_at,
             CONF_CLIENT_ID: self._client_id,
         }
+        if password_hash:
+            data[CONF_PASSWORD_HASH] = password_hash
         if self.source == SOURCE_REAUTH:
             entry = self._get_reauth_entry()
         elif self.source == SOURCE_RECONFIGURE:
@@ -242,7 +371,10 @@ class SiiPetConfigFlow(ConfigFlow, domain=DOMAIN):
             self._abort_if_unique_id_configured()
             return self.async_create_entry(title="SiiPet", data=data)
         self._abort_if_unique_id_mismatch(reason="wrong_account")
-        return self.async_update_reload_and_abort(entry, data_updates=data)
+        kept = {
+            key: value for key, value in entry.data.items() if key != CONF_PASSWORD_HASH
+        }
+        return self.async_update_reload_and_abort(entry, data={**kept, **data})
 
     def _client(self) -> SiiPetClient:
         return SiiPetClient(

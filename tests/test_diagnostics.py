@@ -14,9 +14,11 @@ from pytest_homeassistant.test_util.aiohttp import (
 )
 
 from custom_components.siipet.const import (
+    AUTH_PASSWORD,
     CONF_AUTH_METHOD,
     CONF_CLIENT_ID,
     CONF_EXPIRE_AT,
+    CONF_PASSWORD_HASH,
     CONF_TOKEN,
 )
 from custom_components.siipet.diagnostics import (
@@ -28,6 +30,7 @@ from custom_components.siipet.media_store import key_hash
 from .common import (
     COVER,
     DEVICE_STATE,
+    SECRET_HASH,
     STOOL,
     TODAY,
     VIDEO,
@@ -199,3 +202,21 @@ async def test_device_state_diagnostics(
         ],
     }
     assert "SN0001" not in json.dumps(result, default=str)
+
+
+async def test_diagnostics_hide_password_hash(
+    hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
+) -> None:
+    """Diagnostics of a password entry contain no password digest."""
+    hass.config_entries.async_update_entry(
+        config_entry,
+        data={
+            **config_entry.data,
+            CONF_AUTH_METHOD: AUTH_PASSWORD,
+            CONF_PASSWORD_HASH: SECRET_HASH,
+        },
+    )
+    await setup_integration(hass, config_entry)
+    result = await async_get_config_entry_diagnostics(hass, config_entry)
+    assert result["entry"]["data"][CONF_PASSWORD_HASH] == REDACTED
+    assert SECRET_HASH not in json.dumps(result, default=str)

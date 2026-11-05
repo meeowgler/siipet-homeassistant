@@ -50,6 +50,10 @@ TOO_MANY_REQUESTS = 10010
 # this gives about 24 tries before ExpireAt. The token's encoded expiry is
 # 15 days later, but the lifetime that the server enforces is not known.
 RENEW_RETRY_MS = 3_600_000
+# Wait after a sign-in with the stored password before the next one. Another
+# sign-in to the same account ends this session. Without a wait, Home Assistant
+# and the other device would keep ending each other's session.
+RELOGIN_COOLDOWN_MS = 900_000
 
 
 @contextmanager
@@ -77,10 +81,16 @@ class SiiPetClient:
         time_zone: str,
         session: Session | None = None,
         on_session_update: Callable[[Session], None] | None = None,
+        email: str | None = None,
+        password_hash: str | None = None,
         base_url: str = BASE_URL,
         clock: Callable[[], float] = time.time,
     ) -> None:
-        """Create a client. `client_id` is sent as `x-device-identifier`."""
+        """Create a client. `client_id` is sent as `x-device-identifier`.
+
+        With `email` and `password_hash`, the client signs in again by itself
+        when SiiPet ends the session.
+        """
         self._websession = websession
         self._client_id = client_id
         self._time_zone = time_zone
@@ -88,9 +98,13 @@ class SiiPetClient:
         self._on_session_update = on_session_update
         self._base_url = base_url
         self._clock = clock
+        self._email = email
+        self._password_hash = password_hash
         self._renew_lock = asyncio.Lock()
         self._renew_retry_at = 0
         self._renew_warned = False
+        self._relogin_lock = asyncio.Lock()
+        self._relogin_after = 0
 
     @property
     def session(self) -> Session | None:
@@ -120,6 +134,23 @@ class SiiPetClient:
         data = await self._send(path, {"Code": code, "Email": email})
         self._session = _session_from(path, data)
         return self._session
+
+    async def login_with_password(self, email: str, password_hash: str) -> Session:
+        """Sign in with the `hash_password` digest and keep the new session."""
+        path = "/api/v1/user/email/login"
+        data = await self._send(path, {"Email": email, "Password": password_hash})
+        self._session = _session_from(path, data)
+        return self._session
+
+    async def set_password(self, email: str, code: str, password_hash: str) -> None:
+        """Set the password to the `hash_password` digest with an emailed code.
+
+        This does not sign in.
+        """
+        await self._send(
+            "/api/v1/user/email/reset",
+            {"Code": code, "Email": email, "Password": password_hash},
+        )
 
     async def get_cats(self) -> dict[str, Cat]:
         """Return the cats of the account by `PetId`."""
@@ -235,9 +266,19 @@ class SiiPetClient:
             return IotCredentials.from_api(data)
 
     async def _post(self, path: str, body: dict[str, Any]) -> Any:
-        """Send an authenticated request. Renew the session first when due."""
+        """Send an authenticated request. Renew the session first when due.
+
+        When SiiPet ended the session and the client has a password, sign in
+        again and send the request once more.
+        """
         session = await self._ensure_session()
-        return await self._send(path, body, token=session.token)
+        try:
+            return await self._send(path, body, token=session.token)
+        except SiiPetAuthError:
+            if not await self._relogin(session):
+                raise
+        assert self._session is not None
+        return await self._send(path, body, token=self._session.token)
 
     async def _ensure_session(self) -> Session:
         """Renew the token when less than one day remains before `ExpireAt`.
@@ -251,10 +292,12 @@ class SiiPetClient:
             return self._session
         async with self._renew_lock:
             if self._renewal_due():
+                renewing = self._session
                 try:
                     await self._renew()
                 except SiiPetAuthError:
-                    raise
+                    if not await self._relogin(renewing):
+                        raise
                 except SiiPetError as err:
                     self._renew_retry_at = self._now_ms() + RENEW_RETRY_MS
                     if self._renew_warned:
@@ -276,12 +319,52 @@ class SiiPetClient:
             now >= self._renew_retry_at
         )
 
+    async def _relogin(self, failed: Session) -> bool:
+        """Sign in again with the stored password after SiiPet ended `failed`.
+
+        Return True when a new session is ready. Return False when there is no
+        password, when the last sign-in was too recent, or when SiiPet rejects
+        the password. A connection error is raised.
+        """
+        if self._email is None or self._password_hash is None:
+            return False
+        async with self._relogin_lock:
+            if self._session != failed:
+                # Another call signed in while this one waited.
+                return self._session is not None
+            now = self._now_ms()
+            if now < self._relogin_after:
+                return False
+            try:
+                session = await self.login_with_password(
+                    self._email, self._password_hash
+                )
+            except SiiPetConnectionError:
+                # A network failure is not an answer, so it starts no wait.
+                raise
+            except SiiPetError as err:
+                self._relogin_after = now + RELOGIN_COOLDOWN_MS
+                _LOGGER.debug("SiiPet rejected the stored password: %s", err)
+                return False
+            self._relogin_after = now + RELOGIN_COOLDOWN_MS
+            _LOGGER.info("SiiPet ended the session. Signed in again with the password")
+            if self._on_session_update is not None:
+                self._on_session_update(session)
+            return True
+
     async def _renew(self) -> None:
-        """Exchange the current token for a new one."""
-        assert self._session is not None
+        """Exchange the current token for a new one.
+
+        When a sign-in replaced the session during the request, keep that session.
+        """
+        renewing = self._session
+        assert renewing is not None
         path = "/api/v1/user/token/refresh"
-        data = await self._send(path, {}, token=self._session.token)
-        self._session = _session_from(path, data)
+        data = await self._send(path, {}, token=renewing.token)
+        renewed = _session_from(path, data)
+        if self._session != renewing:
+            return
+        self._session = renewed
         if self._on_session_update is not None:
             self._on_session_update(self._session)
 
