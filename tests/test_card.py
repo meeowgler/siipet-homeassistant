@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 from homeassistant.core import HomeAssistant
 from homeassistant.setup import async_setup_component
 import pytest
-from pytest_homeassistant_custom_component.typing import ClientSessionGenerator
+from pytest_homeassistant.typing import ClientSessionGenerator
 
 from custom_components.siipet.card import CARD_FILE
 from custom_components.siipet.const import DOMAIN

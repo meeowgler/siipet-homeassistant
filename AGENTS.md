@@ -5,8 +5,8 @@ This file tells coding agents how to work in this repo. Humans can read it too.
 ## Project
 
 This repo is a Home Assistant custom integration for SiiPet LitterLens litter box cameras.
-It uses the SiiPet cloud API. HACS installs it from `custom_components/siipet/`.
-The minimum Home Assistant version is 2026.9.0.
+It uses the SiiPet cloud API. The Home Assistant Marketplace installs it from `custom_components/siipet/`.
+The minimum Home Assistant version is 2026.11.0. `hacs.json` sets it for the Marketplace.
 
 ## Layout
 
@@ -76,9 +76,6 @@ frontend/              source of the dashboard card: TypeScript, Lit, esbuild, v
   It writes only through `siipet.update_visit` and `siipet.delete_visit`.
 - The card reuses internal tile parts of the Home Assistant frontend. `frontend/src/tile-parts.ts` lists them.
   If a part is missing, the card names it and shows nothing else.
-- The card defines its elements with `defineElement` in `frontend/src/define.ts`, after the app defines `home-assistant`.
-  The card loads in parallel with the app bundle, and the app does not see an element defined before its registry polyfill.
-  On a page without a `home-assistant` element, such as the Cast receiver or a card test, it defines them at once.
 - Only `api/shadow_link.py` talks to AWS IoT. It reads the shadows and never writes them.
 - The device state entities read `SiiPetDeviceCoordinator.data`, and the camera list of the main coordinator for availability. The shadow link runs as a background task, so setup never waits for it.
 
@@ -133,7 +130,7 @@ When you add a field that holds a private value, add its key to `TO_REDACT` in `
 
 ## Commands
 
-Set up a Python 3.14 environment and install the test requirements:
+Set up a Python 3.14.2 or later environment and install the test requirements:
 
 ```bash
 python3.14 -m venv .venv
@@ -158,12 +155,14 @@ npm run check
 
 `npm run check` runs prettier, the type check, the tests, and the build.
 The build writes `custom_components/siipet/frontend/siipet-visits-card.js`.
-Commit that file together with the source change, because HACS installs only `custom_components/siipet/`.
+Commit that file together with the source change, because the Marketplace installs only `custom_components/siipet/`.
 CI fails when the committed file differs from a new build.
 
 ## Tests
 
 - Write the test first, then the code.
+- Fixtures such as `hass` and helpers such as `MockConfigEntry` come from `pytest-homeassistant`.
+  Each of its releases pins one Home Assistant version.
 - Integration tests mock `SiiPetClient` with the fixtures in `tests/conftest.py`.
 - Client tests mock HTTP with the `aioclient_mock` fixture.
 - Card tests define stub tile parts, because the Home Assistant frontend is not available in tests.

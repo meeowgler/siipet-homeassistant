@@ -12,11 +12,11 @@ from homeassistant.config_entries import SOURCE_REAUTH
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import area_registry as ar, device_registry as dr
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-from pytest_homeassistant_custom_component.test_util.aiohttp import (
+from pytest_homeassistant.common import MockConfigEntry
+from pytest_homeassistant.test_util.aiohttp import (
     AiohttpClientMocker,
 )
-from pytest_homeassistant_custom_component.typing import (
+from pytest_homeassistant.typing import (
     ClientSessionGenerator,
     WebSocketGenerator,
 )

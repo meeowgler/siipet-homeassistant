@@ -8,7 +8,7 @@ from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.siipet import async_remove_config_entry_device
 from custom_components.siipet.api import Session, SiiPetAuthError, SiiPetConnectionError
