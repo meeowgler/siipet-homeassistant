@@ -98,9 +98,11 @@ Read `docs/api.md` before you change `api/`. These points cause most mistakes:
 - Email code requests are limited per day (`Code` 10010).
 - A password goes to the server as the lowercase SHA-256 hex digest of its UTF-8 bytes,
   for both `user/email/login` and `user/email/reset`. A password sign-in needs no code.
+  The entry stores only the digest, under `password_hash`.
 - `user/email/login` answers `Code` 10003 for an account without a password and for an unknown address.
-- With a stored password, the client signs in again by itself after an auth error,
-  at most once per `RELOGIN_COOLDOWN_MS`. Another sign-in to the same account ends the session.
+- With a stored password digest, the client signs in again by itself after an auth error,
+  at most once per `RELOGIN_COOLDOWN_MS`. In a live check, a password sign-in ended the session
+  of the phone app. Whether every sign-in ends the other sessions is an open point in `docs/api.md`.
 - `Data.IotCore.Endpoint` of `config/aws/auth` is an `https://` URL. The WebSocket host is its host part.
 - AWS IoT signs the WebSocket URL without the session token. The token goes after the signature.
 
@@ -123,7 +125,7 @@ Read `docs/api.md` before you change `api/`. These points cause most mistakes:
 
 This repo is public. Keep these values out of commits, tests, logs, and entity attributes:
 
-- Tokens, emails, and passwords.
+- Tokens, emails, passwords, and password digests.
 - Camera serial numbers, `UserId`, `GroupId`, `PetId`, and messaging topics.
 - S3 credentials, the bucket name, media keys, and signed URLs.
 - Shadow names, MQTT topics, the AWS IoT endpoint, `IdentityId`, and the MQTT client identifier.

@@ -172,10 +172,10 @@ with `Msg` "not register".
 
 ### Set a password
 
-`AccountSetViewModel` in the Android app sets the account password with
-`AccountRepository.resetPswEmail`. It sends `POST /api/v1/user/email/reset`
-with the emailed code, the address, and the password digest from `SHAUtil.shaEncrypt`,
-which is SHA-256 in lowercase hex.
+The Android app has code that sets the account password, but no screen of app 2.1.1 calls it.
+`AccountSetViewModel.emailResetPws` calls `AccountRepository.resetPswEmail`.
+It sends `POST /api/v1/user/email/reset` with the emailed code, the address,
+and the password digest from `SHAUtil.shaEncrypt`, which is SHA-256 in lowercase hex.
 
 ```json
 {
@@ -957,7 +957,7 @@ They were not tested against the service unless this section says so.
 - The app does not read the HTTP status. The integration also treats HTTP 401 and 403 as an ended session.
 - The app renews the token only when it opens, with the rule `now + 24 h > ExpireAt`. A failed renewal is only logged.
 - A wrong email code at `/api/v1/user/email/register/login` returns `Code` 10004. The app shows other codes with `Msg`.
-- The app has no screen that signs in with a password. It can set a password with an emailed code. See "Set a password".
+- The app has no screen that signs in with a password or sets one. See "Password sign-in" and "Set a password".
 
 ### Request headers of the Android app
 
@@ -1106,7 +1106,7 @@ These results come from tests against a real account.
   A sign-in through `/api/v1/user/email/login` with that password then returned a token,
   and `/api/v1/user/device/sync` with that token returned `Code` 0.
 - A password sign-in from a script ended the session of the phone app on the same account.
-  The app showed its sign-in screen. This fits one active session per account.
+  The app showed its sign-in screen.
 - `/api/v1/user/email/login` answered `Code` 10003 "not register" for an account without a password
   and for an address without an account.
 - The integration's own MQTT connection ran for 120 seconds against the owner account. It connected and reported a state for all 4 cameras. Its log held no serial number, shadow name, identity, or signed URL.
@@ -1146,7 +1146,8 @@ These results come from tests against a real account.
 - Whether the server checks `x-device-os`. `iOS 27.0` works with both model prefixes.
 - Whether an account allows more than one active session. The earlier -2 results
   came from the model header, so they do not answer this. A password sign-in
-  from a script ended the session of the phone app (see Live checks).
+  from a script ended the session of the phone app. After an email-code sign-in
+  from Home Assistant, the phone app kept its session for about one hour (see Live checks).
 - The envelope code for a wrong password on an account that has a password.
 - Whether the server accepts one code for both `/api/v1/user/email/reset` and
   `/api/v1/user/email/register/login`.
