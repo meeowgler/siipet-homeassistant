@@ -31,11 +31,12 @@ from custom_components.siipet.const import (
     CONF_EXPIRE_AT,
     CONF_MEDIA_DAYS,
     CONF_NEW_PASSWORD,
+    CONF_PASSWORD_HASH,
     CONF_TOKEN,
     DOMAIN,
 )
 
-from .common import load_data, make_token
+from .common import SECRET_HASH, load_data, make_token
 
 LOGIN = load_data("login.json")
 NEW_TOKEN = make_token("user-0001", exp=1_795_000_000)
@@ -495,12 +496,13 @@ async def test_password_sign_in(
     data = result["data"]
     assert data[CONF_AUTH_METHOD] == AUTH_PASSWORD
     assert data[CONF_EMAIL] == "cat@example.com"
-    assert data[CONF_PASSWORD] == "secret-1"
+    assert data[CONF_PASSWORD_HASH] == SECRET_HASH
+    assert CONF_PASSWORD not in data
     assert data[CONF_TOKEN] == LOGIN["Token"]
     assert data[CONF_EXPIRE_AT] == LOGIN["ExpireAt"]
     assert _client_ids(mock_client_class) == {data[CONF_CLIENT_ID]}
     password_login.login_with_password.assert_awaited_once_with(
-        "cat@example.com", "secret-1"
+        "cat@example.com", SECRET_HASH
     )
     password_login.request_email_code.assert_not_awaited()
     password_login.get_cats.assert_awaited_once()
@@ -562,12 +564,13 @@ async def test_set_password_with_code(
     assert result["type"] is FlowResultType.CREATE_ENTRY
     data = result["data"]
     assert data[CONF_AUTH_METHOD] == AUTH_PASSWORD
-    assert data[CONF_PASSWORD] == "secret-1"
+    assert data[CONF_PASSWORD_HASH] == SECRET_HASH
+    assert CONF_PASSWORD not in data
     password_login.set_password.assert_awaited_once_with(
-        "cat@example.com", "012345", "secret-1"
+        "cat@example.com", "012345", SECRET_HASH
     )
     password_login.login_with_password.assert_awaited_once_with(
-        "cat@example.com", "secret-1"
+        "cat@example.com", SECRET_HASH
     )
     password_login.login.assert_not_awaited()
 
@@ -635,7 +638,8 @@ async def test_reauth_with_password(
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reauth_successful"
     assert config_entry.data[CONF_AUTH_METHOD] == AUTH_PASSWORD
-    assert config_entry.data[CONF_PASSWORD] == "secret-1"
+    assert config_entry.data[CONF_PASSWORD_HASH] == SECRET_HASH
+    assert CONF_PASSWORD not in config_entry.data
     assert config_entry.data[CONF_TOKEN] == NEW_TOKEN
     assert config_entry.data[CONF_CLIENT_ID] == "client-uuid-0001"
     assert _client_ids(mock_client_class) == {"client-uuid-0001"}
@@ -650,7 +654,7 @@ async def test_reconfigure_password_entry_to_code(
         data={
             **config_entry.data,
             CONF_AUTH_METHOD: AUTH_PASSWORD,
-            CONF_PASSWORD: "secret-1",
+            CONF_PASSWORD_HASH: SECRET_HASH,
         },
     )
     mock_client.login.return_value = Session(NEW_TOKEN, 1_800_000_000_000)
@@ -660,5 +664,5 @@ async def test_reconfigure_password_entry_to_code(
     result = await _sign_in(hass, result["flow_id"])
     assert result["reason"] == "reconfigure_successful"
     assert config_entry.data[CONF_AUTH_METHOD] == AUTH_EMAIL
-    assert CONF_PASSWORD not in config_entry.data
+    assert CONF_PASSWORD_HASH not in config_entry.data
     assert config_entry.data[CONF_TOKEN] == NEW_TOKEN

@@ -28,6 +28,8 @@ from custom_components.siipet.const import CONF_MEDIA_DAYS, DOMAIN
 
 FIXTURES = Path(__file__).parent / "fixtures"
 NOW = "2026-09-26T12:00:00+00:00"
+# The SHA-256 hex digest of "secret-1".
+SECRET_HASH = "f7e7c36e458e80e6b6a2c67d0a9ec09bd718dadd7bfa8d6bf6e7ad526e46c2f7"
 TODAY = date(2026, 9, 26)
 EMPTY_DAY = DayVisits((), {}, False)
 SHADOWS = CameraShadows(config="fake_configInfo", system="fake_systemInfo")

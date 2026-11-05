@@ -7,12 +7,13 @@ from datetime import datetime
 from typing import Any
 
 from homeassistant.components.diagnostics import async_redact_data
-from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
+from homeassistant.const import CONF_EMAIL
 from homeassistant.core import HomeAssistant
 
 from .const import (
     CONF_CLIENT_ID,
     CONF_MEDIA_DAYS,
+    CONF_PASSWORD_HASH,
     CONF_TOKEN,
     DEFAULT_MEDIA_DAYS,
     UNKNOWN_CAT_ID,
@@ -22,7 +23,7 @@ from .coordinator import SiiPetConfigEntry
 TO_REDACT = {
     CONF_CLIENT_ID,
     CONF_EMAIL,
-    CONF_PASSWORD,
+    CONF_PASSWORD_HASH,
     CONF_TOKEN,
     "AccessKeyId",
     "AgoraAuth",

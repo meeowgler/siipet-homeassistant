@@ -13,7 +13,7 @@ from typing import Any
 
 import aiohttp
 
-from .auth import Session, encrypt_challenge, hash_password, needs_renewal
+from .auth import Session, encrypt_challenge, needs_renewal
 from .errors import SiiPetApiError, SiiPetAuthError, SiiPetConnectionError, SiiPetError
 from .models import (
     AbnormalLabels,
@@ -82,14 +82,14 @@ class SiiPetClient:
         session: Session | None = None,
         on_session_update: Callable[[Session], None] | None = None,
         email: str | None = None,
-        password: str | None = None,
+        password_hash: str | None = None,
         base_url: str = BASE_URL,
         clock: Callable[[], float] = time.time,
     ) -> None:
         """Create a client. `client_id` is sent as `x-device-identifier`.
 
-        With `email` and `password`, the client signs in again by itself when
-        SiiPet ends the session.
+        With `email` and `password_hash`, the client signs in again by itself
+        when SiiPet ends the session.
         """
         self._websession = websession
         self._client_id = client_id
@@ -99,7 +99,7 @@ class SiiPetClient:
         self._base_url = base_url
         self._clock = clock
         self._email = email
-        self._password = password
+        self._password_hash = password_hash
         self._renew_lock = asyncio.Lock()
         self._renew_retry_at = 0
         self._renew_warned = False
@@ -135,20 +135,21 @@ class SiiPetClient:
         self._session = _session_from(path, data)
         return self._session
 
-    async def login_with_password(self, email: str, password: str) -> Session:
-        """Sign in with the account password and keep the new session."""
+    async def login_with_password(self, email: str, password_hash: str) -> Session:
+        """Sign in with the `hash_password` digest and keep the new session."""
         path = "/api/v1/user/email/login"
-        data = await self._send(
-            path, {"Email": email, "Password": hash_password(password)}
-        )
+        data = await self._send(path, {"Email": email, "Password": password_hash})
         self._session = _session_from(path, data)
         return self._session
 
-    async def set_password(self, email: str, code: str, password: str) -> None:
-        """Set the account password with an emailed code. This does not sign in."""
+    async def set_password(self, email: str, code: str, password_hash: str) -> None:
+        """Set the password to the `hash_password` digest with an emailed code.
+
+        This does not sign in.
+        """
         await self._send(
             "/api/v1/user/email/reset",
-            {"Code": code, "Email": email, "Password": hash_password(password)},
+            {"Code": code, "Email": email, "Password": password_hash},
         )
 
     async def get_cats(self) -> dict[str, Cat]:
@@ -325,7 +326,7 @@ class SiiPetClient:
         password, when the last sign-in was too recent, or when SiiPet rejects
         the password. A connection error is raised.
         """
-        if self._email is None or self._password is None:
+        if self._email is None or self._password_hash is None:
             return False
         async with self._relogin_lock:
             if self._session != failed:
@@ -335,7 +336,9 @@ class SiiPetClient:
             if now < self._relogin_after:
                 return False
             try:
-                session = await self.login_with_password(self._email, self._password)
+                session = await self.login_with_password(
+                    self._email, self._password_hash
+                )
             except SiiPetConnectionError:
                 # A network failure is not an answer, so it starts no wait.
                 raise
