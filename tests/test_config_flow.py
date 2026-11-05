@@ -733,3 +733,41 @@ async def test_new_password_retry_only_signs_in(
     assert result["data"][CONF_PASSWORD_HASH] == SECRET_HASH
     password_login.set_password.assert_awaited_once()
     assert password_login.login_with_password.await_count == 2
+
+
+@pytest.mark.parametrize(
+    ("start", "reason"),
+    [
+        (_start_reauth, "reauth_successful"),
+        (_start_reconfigure, "reconfigure_successful"),
+    ],
+)
+async def test_new_password_for_token_entry_needs_code_sign_in(
+    hass: HomeAssistant,
+    password_login: AsyncMock,
+    token_entry: MockConfigEntry,
+    start: Callable[[HomeAssistant, MockConfigEntry], Awaitable[dict[str, Any]]],
+    reason: str,
+) -> None:
+    """An entry without an address gets no new password, and the code alone signs in."""
+    password_login.login.return_value = Session(NEW_TOKEN, 1_800_000_000_000)
+    result = await start(hass, token_entry)
+    flow_id = result["flow_id"]
+    await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_EMAIL: "cat@example.com"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_CODE: "012345", CONF_NEW_PASSWORD: "secret-1"}
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "code"
+    assert result["errors"] == {CONF_NEW_PASSWORD: "new_password_needs_email"}
+    password_login.set_password.assert_not_awaited()
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_CODE: "012345"}
+    )
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == reason
+    assert token_entry.data[CONF_EMAIL] == "cat@example.com"
+    assert CONF_PASSWORD_HASH not in token_entry.data

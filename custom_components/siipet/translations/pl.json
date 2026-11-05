@@ -31,6 +31,7 @@
       "invalid_code": "Kod jest nieprawidłowy albo wygasł.",
       "invalid_email": "Wprowadź prawidłowy adres e-mail.",
       "login_failed": "SiiPet odrzucił logowanie. Zamknij ten formularz i zacznij od nowa, aby dostać nowy kod.",
+      "new_password_needs_email": "Ten wpis nie ma jeszcze adresu e-mail. Zostaw nowe hasło puste i najpierw zaloguj się kodem. Hasło możesz ustawić przy następnym logowaniu.",
       "session_rejected": "SiiPet przyjął logowanie, ale odrzucił nową sesję. Zamknij ten formularz i zacznij od nowa.",
       "set_password_failed": "SiiPet nie ustawił hasła. Zamknij ten formularz i zacznij od nowa, aby dostać nowy kod.",
       "too_many_requests": "SiiPet pozwala poprosić o kod tylko kilka razy dziennie. Spróbuj ponownie jutro.",

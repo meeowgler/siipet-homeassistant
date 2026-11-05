@@ -173,25 +173,21 @@ class SiiPetConfigFlow(ConfigFlow, domain=DOMAIN):
         new_password = (user_input or {}).get(CONF_NEW_PASSWORD) or ""
         if user_input is not None and new_password:
             # The reset changes the account at once, but the user id check
-            # in _async_finish comes after it, so check the address first.
-            if self._is_other_account():
+            # in _async_finish comes after it. So reauth and reconfigure set
+            # a password only for the address that the entry stores.
+            entry = self._entry_to_sign_in_again()
+            if entry is not None and CONF_EMAIL not in entry.data:
+                errors[CONF_NEW_PASSWORD] = "new_password_needs_email"
+            elif entry is not None and (
+                entry.data[CONF_EMAIL].casefold() != self._email.casefold()
+            ):
                 return self.async_abort(reason="wrong_account")
-            client = self._client()
-            password_hash = hash_password(new_password)
-            if password_hash != self._password_set:
-                errors = await self._async_set_password(
-                    client, user_input[CONF_CODE].strip(), password_hash
+            else:
+                result, errors = await self._async_set_password_and_sign_in(
+                    user_input[CONF_CODE].strip(), new_password
                 )
-                if not errors:
-                    self._password_set = password_hash
-            if not errors:
-                signed_in, errors = await self._async_password_sign_in(
-                    client, password_hash
-                )
-                if signed_in is not None:
-                    return await self._async_finish(
-                        *signed_in, password_hash=password_hash
-                    )
+                if result is not None:
+                    return result
         elif user_input is not None:
             client = self._client()
             try:
@@ -248,16 +244,13 @@ class SiiPetConfigFlow(ConfigFlow, domain=DOMAIN):
             self._client_id = entry_data[CONF_CLIENT_ID]
         return await self.async_step_email()
 
-    def _is_other_account(self) -> bool:
-        """Return True when reauth or reconfigure uses another address than the entry."""
+    def _entry_to_sign_in_again(self) -> ConfigEntry | None:
+        """Return the entry of a reauth or reconfigure flow, or None."""
         if self.source == SOURCE_REAUTH:
-            entry = self._get_reauth_entry()
-        elif self.source == SOURCE_RECONFIGURE:
-            entry = self._get_reconfigure_entry()
-        else:
-            return False
-        stored = entry.data.get(CONF_EMAIL)
-        return stored is not None and stored.casefold() != self._email.casefold()
+            return self._get_reauth_entry()
+        if self.source == SOURCE_RECONFIGURE:
+            return self._get_reconfigure_entry()
+        return None
 
     async def _async_request_code(self, email: str) -> dict[str, str]:
         """Request an email code. Return form errors."""
@@ -298,6 +291,25 @@ class SiiPetConfigFlow(ConfigFlow, domain=DOMAIN):
         if errors := await self._async_check_session(client):
             return None, errors
         return (session, user_id), {}
+
+    async def _async_set_password_and_sign_in(
+        self, code: str, password: str
+    ) -> tuple[ConfigFlowResult | None, dict[str, str]]:
+        """Set the password with the code, then sign in with it.
+
+        Return the flow result, or None and the form errors. A retry with the
+        same password only signs in.
+        """
+        client = self._client()
+        password_hash = hash_password(password)
+        if password_hash != self._password_set:
+            if errors := await self._async_set_password(client, code, password_hash):
+                return None, errors
+            self._password_set = password_hash
+        signed_in, errors = await self._async_password_sign_in(client, password_hash)
+        if signed_in is None:
+            return None, errors
+        return await self._async_finish(*signed_in, password_hash=password_hash), {}
 
     async def _async_set_password(
         self, client: SiiPetClient, code: str, password_hash: str

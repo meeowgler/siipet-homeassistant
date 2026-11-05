@@ -31,6 +31,7 @@
       "invalid_code": "The code is not correct or it expired.",
       "invalid_email": "Enter a valid email address.",
       "login_failed": "SiiPet rejected the sign-in. Close this form and start again to get a new code.",
+      "new_password_needs_email": "This entry has no email address yet. Leave the new password empty and sign in with the code first. You can set a password the next time that you sign in.",
       "session_rejected": "SiiPet accepted the sign-in, but rejected the new session. Close this form and start again.",
       "set_password_failed": "SiiPet did not set the password. Close this form and start again to get a new code.",
       "too_many_requests": "SiiPet allows only a few code requests per day. Try again tomorrow.",
