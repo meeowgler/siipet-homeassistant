@@ -168,6 +168,13 @@ Set a number from 0 to 30. 0 turns the copy off and deletes it.
 
 ## Dashboard card
 
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/card-dark.webp">
+  <img src="docs/images/card-light.webp" width="800" alt="Two SiiPet visits cards. The first card shows the visits of one cat on one day. The second card shows the edit view of a visit.">
+</picture>
+
+The cats and the visits in the picture are made up.
+
 The integration adds the **SiiPet visits** card to your dashboards. You do not add a resource.
 
 1. Edit a dashboard and choose **Add card**.

@@ -49,6 +49,7 @@ tests/
   api/                 client, MQTT, and shadow link tests, with the HTTP mocker and a fake broker
   fixtures/            JSON responses with fake values only
 docs/api.md            SiiPet cloud API reference
+docs/images/           card pictures in the README, light and dark
 frontend/              source of the dashboard card: TypeScript, Lit, esbuild, vitest
   src/                 card element, day view, edit view, API calls, date helpers, card texts in localize.ts
   test/                card tests with happy-dom and stub tile parts
