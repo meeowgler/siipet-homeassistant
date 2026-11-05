@@ -27,7 +27,7 @@ from custom_components.siipet.api import (
 from custom_components.siipet.api.auth import hash_password
 from custom_components.siipet.api.client import BASE_URL, RELOGIN_COOLDOWN_MS
 
-from ..common import load_data, load_fixture
+from ..common import load_data, load_fixture, make_token
 
 NOW_MS = 1_790_424_000_000  # 2026-09-26T12:00:00Z
 TOKEN = load_data("login.json")["Token"]
@@ -816,3 +816,89 @@ async def test_relogin_retries_after_a_connection_error(
         await client.get_cats()
     assert await client.get_cats()
     assert len(attempts) == 2
+
+
+async def renewal_during_relogin(
+    websession: aiohttp.ClientSession,
+    aioclient_mock: AiohttpClientMocker,
+    refresh: dict[str, Any],
+) -> tuple[SiiPetClient, list[Session], asyncio.Task[Any]]:
+    """Answer a renewal of the old token after another call signed in again.
+
+    The first call sends with the old token before the renewal is due. While a
+    second call waits for its renewal, SiiPet ends the first session, and the
+    first call signs in again with the password. Then the renewal answers with
+    `refresh`. Return the client, its session updates, and the second call.
+    """
+    now = [NOW_MS / 1000]
+    updates: list[Session] = []
+    first_sent, end_first = asyncio.Event(), asyncio.Event()
+    refresh_sent, answer_refresh = asyncio.Event(), asyncio.Event()
+
+    async def pet_sync(method: str, url: URL, data: Any) -> AiohttpClientMockResponse:
+        if not first_sent.is_set():
+            first_sent.set()
+            await end_first.wait()
+            return AiohttpClientMockResponse(method, url, json=ENDED)
+        return AiohttpClientMockResponse(
+            method, url, json=load_fixture("pet_sync.json")
+        )
+
+    async def token_refresh(
+        method: str, url: URL, data: Any
+    ) -> AiohttpClientMockResponse:
+        refresh_sent.set()
+        await answer_refresh.wait()
+        return AiohttpClientMockResponse(method, url, **refresh)
+
+    aioclient_mock.post(url("user/pet/sync"), side_effect=pet_sync)
+    aioclient_mock.post(url("user/token/refresh"), side_effect=token_refresh)
+    aioclient_mock.post(url("user/email/login"), json=NEW_LOGIN)
+    client = make_client(
+        websession,
+        session=Session(TOKEN, NOW_MS + 2 * 86_400_000),
+        updates=updates,
+        password="secret-1",
+        clock=lambda: now[0],
+    )
+    first = asyncio.create_task(client.get_cats())
+    await first_sent.wait()
+    now[0] += 36 * 3600
+    second = asyncio.create_task(client.get_cats())
+    await refresh_sent.wait()
+    end_first.set()
+    assert await first
+    answer_refresh.set()
+    return client, updates, second
+
+
+async def test_rejected_renewal_after_relogin_keeps_new_session(
+    websession: aiohttp.ClientSession, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """A renewal rejected after another call signed in again uses the new session."""
+    client, updates, second = await renewal_during_relogin(
+        websession, aioclient_mock, {"status": 401}
+    )
+    assert await second
+    assert client.session == NEW_SESSION
+    assert updates == [NEW_SESSION]
+    assert len(calls(aioclient_mock, "user/email/login")) == 1
+    last_sync = calls(aioclient_mock, "user/pet/sync")[-1]
+    assert last_sync[1]["authorization"] == f"Bearer {NEW_SESSION.token}"
+
+
+async def test_late_renewal_keeps_session_of_relogin(
+    websession: aiohttp.ClientSession, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """A renewal of the old token that answers after a new sign-in is dropped."""
+    renewed = {"Token": make_token("user-0001"), "ExpireAt": NOW_MS + 30 * 86_400_000}
+    client, updates, second = await renewal_during_relogin(
+        websession,
+        aioclient_mock,
+        {"json": {"Code": 0, "Msg": "success", "Data": renewed}},
+    )
+    assert await second
+    assert client.session == NEW_SESSION
+    assert updates == [NEW_SESSION]
+    last_sync = calls(aioclient_mock, "user/pet/sync")[-1]
+    assert last_sync[1]["authorization"] == f"Bearer {NEW_SESSION.token}"

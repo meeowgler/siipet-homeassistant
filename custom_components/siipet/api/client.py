@@ -291,11 +291,11 @@ class SiiPetClient:
             return self._session
         async with self._renew_lock:
             if self._renewal_due():
+                renewing = self._session
                 try:
                     await self._renew()
                 except SiiPetAuthError:
-                    assert self._session is not None
-                    if not await self._relogin(self._session):
+                    if not await self._relogin(renewing):
                         raise
                 except SiiPetError as err:
                     self._renew_retry_at = self._now_ms() + RENEW_RETRY_MS
@@ -350,11 +350,18 @@ class SiiPetClient:
             return True
 
     async def _renew(self) -> None:
-        """Exchange the current token for a new one."""
-        assert self._session is not None
+        """Exchange the current token for a new one.
+
+        When a sign-in replaced the session during the request, keep that session.
+        """
+        renewing = self._session
+        assert renewing is not None
         path = "/api/v1/user/token/refresh"
-        data = await self._send(path, {}, token=self._session.token)
-        self._session = _session_from(path, data)
+        data = await self._send(path, {}, token=renewing.token)
+        renewed = _session_from(path, data)
+        if self._session != renewing:
+            return
+        self._session = renewed
         if self._on_session_update is not None:
             self._on_session_update(self._session)
 
