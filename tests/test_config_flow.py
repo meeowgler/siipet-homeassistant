@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Generator
+from collections.abc import Awaitable, Callable, Generator
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
 import uuid
@@ -666,3 +666,70 @@ async def test_reconfigure_password_entry_to_code(
     assert config_entry.data[CONF_AUTH_METHOD] == AUTH_EMAIL
     assert CONF_PASSWORD_HASH not in config_entry.data
     assert config_entry.data[CONF_TOKEN] == NEW_TOKEN
+
+
+@pytest.mark.parametrize("start", [_start_reauth, _start_reconfigure])
+async def test_new_password_for_another_email_aborts(
+    hass: HomeAssistant,
+    password_login: AsyncMock,
+    config_entry: MockConfigEntry,
+    start: Callable[[HomeAssistant, MockConfigEntry], Awaitable[dict[str, Any]]],
+) -> None:
+    """A new password for another address aborts before it changes that account."""
+    result = await start(hass, config_entry)
+    flow_id = result["flow_id"]
+    await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_EMAIL: "dog@example.com"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_CODE: "012345", CONF_NEW_PASSWORD: "secret-1"}
+    )
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "wrong_account"
+    password_login.set_password.assert_not_awaited()
+    assert CONF_PASSWORD_HASH not in config_entry.data
+
+
+async def test_new_password_in_reauth_ignores_email_case(
+    hass: HomeAssistant, password_login: AsyncMock, config_entry: MockConfigEntry
+) -> None:
+    """Reauth sets a new password when the address differs from the entry only in case."""
+    result = await _start_reauth(hass, config_entry)
+    flow_id = result["flow_id"]
+    await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_EMAIL: "Cat@Example.com"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_CODE: "012345", CONF_NEW_PASSWORD: "secret-1"}
+    )
+    assert result["reason"] == "reauth_successful"
+    password_login.set_password.assert_awaited_once_with(
+        "Cat@Example.com", "012345", SECRET_HASH
+    )
+    assert config_entry.data[CONF_PASSWORD_HASH] == SECRET_HASH
+
+
+async def test_new_password_retry_only_signs_in(
+    hass: HomeAssistant, password_login: AsyncMock
+) -> None:
+    """After the code set the password, a retry of the same form only signs in."""
+    password_login.login_with_password.side_effect = [
+        SiiPetConnectionError("down"),
+        Session(LOGIN["Token"], LOGIN["ExpireAt"]),
+    ]
+    flow_id = await _start(hass)
+    await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_EMAIL: "cat@example.com"}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_CODE: "012345", CONF_NEW_PASSWORD: "secret-1"}
+    )
+    assert result["errors"] == {"base": "cannot_connect"}
+
+    result = await hass.config_entries.flow.async_configure(
+        flow_id, {CONF_CODE: "012345", CONF_NEW_PASSWORD: "secret-1"}
+    )
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["data"][CONF_PASSWORD_HASH] == SECRET_HASH
+    password_login.set_password.assert_awaited_once()
+    assert password_login.login_with_password.await_count == 2

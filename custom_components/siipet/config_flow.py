@@ -116,6 +116,8 @@ class SiiPetConfigFlow(ConfigFlow, domain=DOMAIN):
         """Start a flow with a new client identifier."""
         self._email = ""
         self._client_id = str(uuid.uuid4())
+        # The digest that the code of this flow already set on the account.
+        self._password_set: str | None = None
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
@@ -164,16 +166,24 @@ class SiiPetConfigFlow(ConfigFlow, domain=DOMAIN):
         """Ask for the emailed code and sign in.
 
         With a new password, the code sets the account password first, and
-        the sign-in uses that password.
+        the sign-in uses that password. A retry with the same password only
+        signs in.
         """
         errors: dict[str, str] = {}
         new_password = (user_input or {}).get(CONF_NEW_PASSWORD) or ""
         if user_input is not None and new_password:
+            # The reset changes the account at once, but the user id check
+            # in _async_finish comes after it, so check the address first.
+            if self._is_other_account():
+                return self.async_abort(reason="wrong_account")
             client = self._client()
             password_hash = hash_password(new_password)
-            errors = await self._async_set_password(
-                client, user_input[CONF_CODE].strip(), password_hash
-            )
+            if password_hash != self._password_set:
+                errors = await self._async_set_password(
+                    client, user_input[CONF_CODE].strip(), password_hash
+                )
+                if not errors:
+                    self._password_set = password_hash
             if not errors:
                 signed_in, errors = await self._async_password_sign_in(
                     client, password_hash
@@ -237,6 +247,17 @@ class SiiPetConfigFlow(ConfigFlow, domain=DOMAIN):
         if entry_data.get(CONF_AUTH_METHOD, AUTH_EMAIL) != AUTH_TOKEN:
             self._client_id = entry_data[CONF_CLIENT_ID]
         return await self.async_step_email()
+
+    def _is_other_account(self) -> bool:
+        """Return True when reauth or reconfigure uses another address than the entry."""
+        if self.source == SOURCE_REAUTH:
+            entry = self._get_reauth_entry()
+        elif self.source == SOURCE_RECONFIGURE:
+            entry = self._get_reconfigure_entry()
+        else:
+            return False
+        stored = entry.data.get(CONF_EMAIL)
+        return stored is not None and stored.casefold() != self._email.casefold()
 
     async def _async_request_code(self, email: str) -> dict[str, str]:
         """Request an email code. Return form errors."""
