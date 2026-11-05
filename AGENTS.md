@@ -158,6 +158,15 @@ The build writes `custom_components/siipet/frontend/siipet-visits-card.js`.
 Commit that file together with the source change, because the Marketplace installs only `custom_components/siipet/`.
 CI fails when the committed file differs from a new build.
 
+## Releases
+
+- When you publish a GitHub release, `.github/workflows/release.yml` attaches `siipet.zip` to it.
+  The zip holds the contents of `custom_components/siipet/` at the release tag.
+- `hacs.json` sets `zip_release`, so the Marketplace installs `siipet.zip` and shows its download count.
+  The Marketplace cannot install a release that has no zip. If the workflow fails, run it again.
+- The Marketplace reads `hacs.json` at the release tag.
+  A release whose `hacs.json` has no `zip_release` installs from the source archive.
+
 ## Tests
 
 - Write the test first, then the code.
