@@ -11,7 +11,6 @@ import {
   updateVisit,
 } from "./api";
 import { changedFields, type EditForm, initialForm } from "./changes";
-import { defineElement } from "./define";
 import { dayLabel, durationText, timeLabel, TYPE_STYLE } from "./format";
 import { localization, type Localization } from "./localize";
 import { optionRow } from "./option-row";
@@ -645,4 +644,6 @@ export class SiiPetVisitEditor extends LitElement {
   }
 }
 
-void defineElement("siipet-visit-editor", SiiPetVisitEditor);
+if (!customElements.get("siipet-visit-editor")) {
+  customElements.define("siipet-visit-editor", SiiPetVisitEditor);
+}

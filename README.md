@@ -1,6 +1,6 @@
 # siipet-homeassistant
 
-[![HACS Custom](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
+[![Marketplace Custom](https://img.shields.io/badge/Marketplace-Custom-41BDF5.svg)](https://www.home-assistant.io/integrations/marketplace/)
 [![GitHub release](https://img.shields.io/github/v/release/pszypowicz/siipet-homeassistant)](https://github.com/pszypowicz/siipet-homeassistant/releases)
 [![Validate](https://github.com/pszypowicz/siipet-homeassistant/actions/workflows/validate.yml/badge.svg)](https://github.com/pszypowicz/siipet-homeassistant/actions/workflows/validate.yml)
 [![License](https://img.shields.io/github/license/pszypowicz/siipet-homeassistant)](LICENSE)
@@ -15,28 +15,30 @@ Its actions list, edit, and delete visits. A dashboard card shows the visits of 
 
 ## Requirements
 
-- Home Assistant 2026.9.0 or later.
+- Home Assistant 2026.11.0 or later.
 - A SiiPet account with at least one camera.
 
 ## Install
 
-Option 1: Install with HACS. HACS then shows each new release as an update.
+Option 1: Install from the Marketplace. Home Assistant then shows each new release in **Settings > Updates**.
+After an update, restart Home Assistant. A repair reminds you.
 
-[![Open your Home Assistant instance and open a repository inside the Home Assistant Community Store.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=pszypowicz&repository=siipet-homeassistant&category=integration)
+[![Open your Home Assistant instance and open a repository inside the Marketplace.](https://my.home-assistant.io/badges/marketplace_repository.svg)](https://my.home-assistant.io/redirect/marketplace_repository/?owner=pszypowicz&repository=siipet-homeassistant&category=integration)
 
-1. Select the button above. If HACS asks to add the repository, choose **Add**.
-2. Choose **Download** and download the latest version.
-3. Restart Home Assistant.
+1. Select the button above. If the Marketplace asks to add the repository, choose **Add**.
+   The Marketplace needs a GitHub connection to add a repository. If it asks you to connect GitHub, connect it and select the button again.
+2. Choose **Install**, then choose **Install** in the dialog.
+3. When the install is complete, the SiiPet setup opens. Continue at step 2 of the setup below.
 
-Without the button, open **HACS**, open the three-dot menu, and choose **Custom repositories**.
-Add `https://github.com/pszypowicz/siipet-homeassistant` as an **Integration**, then find **SiiPet** in HACS.
+Without the button, go to **Settings > Marketplace** and choose **Add from link**.
+Enter `https://github.com/pszypowicz/siipet-homeassistant`, choose **Add**, and then open **SiiPet** in the Marketplace.
 
 Option 2: Copy the files by hand.
 
 1. Copy `custom_components/siipet/` from this repo into your Home Assistant config, so that the path is `/config/custom_components/siipet/`.
 2. Restart Home Assistant.
 
-Then, for either option:
+Then, for either option, set up the integration:
 
 [![Open your Home Assistant instance and start setting up a new integration.](https://my.home-assistant.io/badges/config_flow_start.svg)](https://my.home-assistant.io/redirect/config_flow_start/?domain=siipet)
 

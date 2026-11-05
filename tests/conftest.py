@@ -11,7 +11,7 @@ from freezegun.api import FrozenDateTimeFactory
 from homeassistant.const import CONF_EMAIL
 from homeassistant.core import HomeAssistant
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
+from pytest_homeassistant.common import MockConfigEntry
 
 from custom_components.siipet.api import (
     AbnormalLabels,
@@ -33,11 +33,6 @@ from custom_components.siipet.const import (
 )
 
 from .common import EMPTY_DAY, NOW, TODAY, FakeShadowLink, fixture_day, load_data
-
-
-@pytest.fixture(autouse=True)
-def auto_enable_custom_integrations(enable_custom_integrations: None) -> None:
-    """Let Home Assistant load the integration from custom_components."""
 
 
 @pytest.fixture(autouse=True)

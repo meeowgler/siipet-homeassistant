@@ -20,8 +20,8 @@ from homeassistant.exceptions import (
 )
 from homeassistant.helpers import area_registry as ar, device_registry as dr
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
-from pytest_homeassistant_custom_component.test_util.aiohttp import (
+from pytest_homeassistant.common import MockConfigEntry
+from pytest_homeassistant.test_util.aiohttp import (
     AiohttpClientMocker,
 )
 import voluptuous as vol

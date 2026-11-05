@@ -27,13 +27,13 @@ def test_manifest() -> None:
     assert manifest["requirements"] == []
     assert manifest["dependencies"] == ["http", "media_source", "websocket_api"]
     assert manifest["after_dependencies"] == ["frontend"]
-    assert manifest["version"] == "0.4.1"
+    assert manifest["version"] == "0.5.0"
 
 
 def test_hacs_minimum_version() -> None:
-    """HACS requires Home Assistant 2026.9.0 or later."""
+    """`hacs.json` requires Home Assistant 2026.11.0 or later."""
     hacs = json.loads((ROOT / "hacs.json").read_text())
-    assert hacs["homeassistant"] == "2026.9.0"
+    assert hacs["homeassistant"] == "2026.11.0"
 
 
 @pytest.mark.parametrize(("name", "size"), [("icon.png", 256), ("icon@2x.png", 512)])
