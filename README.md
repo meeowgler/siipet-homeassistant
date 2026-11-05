@@ -2,6 +2,7 @@
 
 [![Marketplace Custom](https://img.shields.io/badge/Marketplace-Custom-41BDF5.svg)](https://www.home-assistant.io/integrations/marketplace/)
 [![GitHub release](https://img.shields.io/github/v/release/pszypowicz/siipet-homeassistant)](https://github.com/pszypowicz/siipet-homeassistant/releases)
+[![Downloads](https://img.shields.io/github/downloads/pszypowicz/siipet-homeassistant/total)](https://github.com/pszypowicz/siipet-homeassistant/releases)
 [![Validate](https://github.com/pszypowicz/siipet-homeassistant/actions/workflows/validate.yml/badge.svg)](https://github.com/pszypowicz/siipet-homeassistant/actions/workflows/validate.yml)
 [![License](https://img.shields.io/github/license/pszypowicz/siipet-homeassistant)](LICENSE)
 

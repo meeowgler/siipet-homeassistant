@@ -1,4 +1,6 @@
 {
   "name": "SiiPet",
-  "homeassistant": "2026.11.0"
+  "homeassistant": "2026.11.0",
+  "zip_release": true,
+  "filename": "siipet.zip"
 }

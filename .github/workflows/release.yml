@@ -1,0 +1,22 @@
+name: Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  zip:
+    name: Release zip
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      # The Marketplace extracts the zip into custom_components/siipet/,
+      # so the integration files go at the top of the zip.
+      - run: zip -r -X "$GITHUB_WORKSPACE/siipet.zip" .
+        working-directory: custom_components/siipet
+      - run: gh release upload "$TAG" siipet.zip --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
