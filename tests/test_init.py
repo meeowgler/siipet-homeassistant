@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.const import CONF_EMAIL
@@ -42,6 +42,19 @@ async def test_setup_and_unload(
 
     assert await hass.config_entries.async_unload(config_entry.entry_id)
     assert config_entry.state is ConfigEntryState.NOT_LOADED
+
+
+async def test_failed_platform_unload_names_the_reason(
+    hass: HomeAssistant, mock_client: AsyncMock, config_entry: MockConfigEntry
+) -> None:
+    """A platform that fails to unload leaves the entry with the platform reason."""
+    await setup_integration(hass, config_entry)
+    with patch.object(
+        hass.config_entries, "async_unload_platforms", return_value=False
+    ):
+        assert not await hass.config_entries.async_unload(config_entry.entry_id)
+    assert config_entry.state is ConfigEntryState.FAILED_UNLOAD
+    assert config_entry.error_reason_translation_key == "unload_platforms_failed"
 
 
 async def test_session_update_is_saved(

@@ -26,7 +26,7 @@ from homeassistant.helpers.selector import (
     TextSelectorConfig,
     TextSelectorType,
 )
-import voluptuous as vol
+import probatio
 
 from .api import (
     Session,
@@ -58,24 +58,24 @@ from .const import (
 
 _LOGGER = logging.getLogger(__name__)
 
-EMAIL_SCHEMA = vol.Schema(
+EMAIL_SCHEMA = probatio.Schema(
     {
-        vol.Required(CONF_EMAIL): TextSelector(
+        probatio.Required(CONF_EMAIL): TextSelector(
             TextSelectorConfig(type=TextSelectorType.EMAIL, autocomplete="email")
         ),
-        vol.Optional(CONF_PASSWORD): TextSelector(
+        probatio.Optional(probatio.Secret(CONF_PASSWORD)): TextSelector(
             TextSelectorConfig(
                 type=TextSelectorType.PASSWORD, autocomplete="current-password"
             )
         ),
     }
 )
-CODE_SCHEMA = vol.Schema(
+CODE_SCHEMA = probatio.Schema(
     {
-        vol.Required(CONF_CODE): TextSelector(
+        probatio.Required(CONF_CODE): TextSelector(
             TextSelectorConfig(autocomplete="one-time-code")
         ),
-        vol.Optional(CONF_NEW_PASSWORD): TextSelector(
+        probatio.Optional(probatio.Secret(CONF_NEW_PASSWORD)): TextSelector(
             TextSelectorConfig(
                 type=TextSelectorType.PASSWORD, autocomplete="new-password"
             )
@@ -83,9 +83,9 @@ CODE_SCHEMA = vol.Schema(
     }
 )
 
-OPTIONS_SCHEMA = vol.Schema(
+OPTIONS_SCHEMA = probatio.Schema(
     {
-        vol.Required(CONF_MEDIA_DAYS, default=DEFAULT_MEDIA_DAYS): vol.All(
+        probatio.Required(CONF_MEDIA_DAYS, default=DEFAULT_MEDIA_DAYS): probatio.All(
             NumberSelector(
                 NumberSelectorConfig(
                     min=0,
@@ -95,7 +95,7 @@ OPTIONS_SCHEMA = vol.Schema(
                     unit_of_measurement="days",
                 )
             ),
-            vol.Coerce(int),
+            probatio.Coerce(int),
         )
     }
 )
@@ -365,8 +365,10 @@ class SiiPetConfigFlow(ConfigFlow, domain=DOMAIN):
             data[CONF_PASSWORD_HASH] = password_hash
         if self.source == SOURCE_REAUTH:
             entry = self._get_reauth_entry()
+            reason = "reauth_successful"
         elif self.source == SOURCE_RECONFIGURE:
             entry = self._get_reconfigure_entry()
+            reason = "reconfigure_successful"
         else:
             self._abort_if_unique_id_configured()
             return self.async_create_entry(title="SiiPet", data=data)
@@ -374,7 +376,11 @@ class SiiPetConfigFlow(ConfigFlow, domain=DOMAIN):
         kept = {
             key: value for key, value in entry.data.items() if key != CONF_PASSWORD_HASH
         }
-        return self.async_update_reload_and_abort(entry, data={**kept, **data})
+        # Without a reason, Home Assistant shows its own text in place of the
+        # texts in our translations.
+        return self.async_update_reload_and_abort(
+            entry, data={**kept, **data}, reason=reason
+        )
 
     def _client(self) -> SiiPetClient:
         return SiiPetClient(

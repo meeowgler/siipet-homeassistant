@@ -150,6 +150,35 @@ Home Assistant serves the thumbnails for you.
 A recording plays from the [local media copy](#local-media-copy) when the copy has it.
 Otherwise it plays directly from the SiiPet cloud storage, through a link that expires after one hour.
 
+### Visit images in AI Task
+
+The AI Task actions can attach the cover image and the stool image of a visit.
+Give `media-source://siipet/cover/<event id>` or `media-source://siipet/stool/<event id>` as the attachment.
+The image comes from the local media copy when the copy has it, and otherwise from the SiiPet cloud storage through Home Assistant.
+The media browser does not list these images, so set the id in YAML.
+This automation describes the cover image after each visit of one cat and sends the text in a notification.
+Replace the entity and the notify action with your own.
+
+```yaml
+triggers:
+  - trigger: state
+    entity_id: event.luna_visit
+    not_from: unavailable
+    not_to: unavailable
+actions:
+  - action: ai_task.generate_data
+    data:
+      task_name: Describe the visit
+      instructions: Describe what you see in this picture of the litter box.
+      attachments:
+        - media_content_id: "media-source://siipet/cover/{{ trigger.to_state.attributes.event_id }}"
+          media_content_type: image/jpeg
+    response_variable: description
+  - action: notify.mobile_app_phone
+    data:
+      message: "{{ description.data }}"
+```
+
 ## Local media copy
 
 Home Assistant keeps a copy of the recordings and images of the last 7 days.

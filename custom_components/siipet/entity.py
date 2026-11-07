@@ -129,6 +129,11 @@ class SiiPetCameraStateEntity(CoordinatorEntity[SiiPetDeviceCoordinator]):
             self._main.async_add_listener(self._handle_coordinator_update)
         )
 
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """Keep the entity added. Nothing here depends on the entity id."""
+        super().async_entity_id_changed(old_entity_id)
+
     async def async_update(self) -> None:
         """Do nothing. The shadow link pushes every value, so there is nothing to read."""
 

@@ -248,7 +248,7 @@ async def test_low_disk_space_stops_the_copy_and_raises_an_issue(
     ):
         await setup_mirror(hass, config_entry, 7)
     assert aioclient_mock.call_count == 0
-    assert _issue(hass, ISSUE_DISK_FULL) is not None
+    assert _issue(hass, ISSUE_DISK_FULL).config_entry_id == config_entry.entry_id
 
     await _refresh(hass, config_entry)
     assert (day_folder(media_dir) / "ev-1.mp4").exists()
@@ -304,6 +304,21 @@ async def test_a_later_setup_clears_the_folder_issue(
     serve_days(mock_client, {})
     mock_s3(aioclient_mock)
     await setup_mirror(hass, config_entry, 7)
+    assert _issue(hass, ISSUE_FOLDER) is None
+
+
+async def test_issues_go_with_the_entry(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+) -> None:
+    """A media copy issue belongs to the entry, so it goes when the entry goes."""
+    hass.config.media_dirs = {}
+    await setup_mirror(hass, config_entry, 7)
+    assert _issue(hass, ISSUE_FOLDER).config_entry_id == config_entry.entry_id
+
+    await hass.config_entries.async_remove(config_entry.entry_id)
+    await hass.async_block_till_done()
     assert _issue(hass, ISSUE_FOLDER) is None
 
 

@@ -168,6 +168,16 @@ class SiiPetMedia:
         async with self.async_open(key, f"{kind} image", IMAGE_TIMEOUT) as response:
             return await response.read()
 
+    async def async_read_image(self, kind: MediaKind, item_id: str) -> bytes:
+        """Return the bytes of an image, from the local copy when it holds one."""
+        if (path := await self.async_local_image(kind, item_id)) is not None:
+            try:
+                return await self.hass.async_add_executor_job(path.read_bytes)
+            except OSError:
+                # The file went away after the check. S3 still has the image.
+                pass
+        return await self.async_fetch_image(kind, item_id)
+
     @contextlib.asynccontextmanager
     async def async_open(
         self, key: str, label: str, client_timeout: aiohttp.ClientTimeout

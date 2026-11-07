@@ -2,8 +2,10 @@
   "domain": "siipet",
   "name": "SiiPet",
   "after_dependencies": ["frontend"],
+  "categories": ["pets"],
   "codeowners": ["@pszypowicz"],
   "config_flow": true,
+  "connectivity": ["cloud"],
   "dependencies": ["http", "media_source", "websocket_api"],
   "documentation": "https://github.com/pszypowicz/siipet-homeassistant",
   "integration_type": "hub",
@@ -11,5 +13,5 @@
   "issue_tracker": "https://github.com/pszypowicz/siipet-homeassistant/issues",
   "requirements": [],
   "single_config_entry": true,
-  "version": "0.6.1"
+  "version": "0.7.0"
 }

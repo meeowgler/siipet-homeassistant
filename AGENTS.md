@@ -38,7 +38,7 @@ custom_components/siipet/
   media.py             SiiPetMedia: media keys, recording URLs, image fetch, local files first
   media_store.py       MediaStore: the local media copy on disk, its index, and verified writes
   media_mirror.py      SiiPetMirror: downloads, backfill, and cleanup of the local media copy
-  media_source.py      media browser: the last 30 days and their visits
+  media_source.py      media browser: the last 30 days and their visits, and image bytes for AI Task
   views.py             authenticated views: images, and recordings from the local media copy
   card.py              serving of the card file, with a content version in its URL
   frontend/            siipet-visits-card.js, the card bundle built from frontend/ at the repo root
@@ -72,6 +72,7 @@ frontend/              source of the dashboard card: TypeScript, Lit, esbuild, v
   The views never build a path from a request. They look up the store index.
 - Only `media_source.py` returns a signed S3 URL, and only for a recording that the local copy does not hold.
   Images go through the image view in `views.py`, so their signed URLs stay inside Home Assistant.
+  For AI Task, `media_source.py` returns the bytes of an image, from the local copy first.
 - The card commands in `websocket_api.py` sign image view paths for the logged-in user. They return no S3 URL.
 - The card reads only through the `siipet/*` websocket commands and `media_source/resolve_media`.
   It writes only through `siipet.update_visit` and `siipet.delete_visit`.

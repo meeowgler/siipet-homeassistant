@@ -13,7 +13,7 @@ from homeassistant.components.http.auth import async_sign_path
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
-import voluptuous as vol
+import probatio
 
 from .api import SiiPetAuthError, SiiPetError, Visit, VisitType
 from .const import DOMAIN, UNKNOWN_CAT_ID
@@ -133,7 +133,7 @@ def _summary(visits: Iterable[Visit]) -> dict[str, int]:
     }
 
 
-@websocket_api.websocket_command({vol.Required("type"): "siipet/cats"})
+@websocket_api.websocket_command({probatio.Required("type"): "siipet/cats"})
 @websocket_api.async_response
 @_translated_errors
 async def ws_cats(
@@ -175,7 +175,7 @@ def _month(value: Any) -> date:
     try:
         return date.fromisoformat(f"{cv.string(value)}-01")
     except ValueError as err:
-        raise vol.Invalid("Expected a month as YYYY-MM") from err
+        raise probatio.Invalid("Expected a month as YYYY-MM") from err
 
 
 def _check_calendar_month(data: SiiPetData, month: date) -> None:
@@ -196,9 +196,9 @@ def _check_calendar_month(data: SiiPetData, month: date) -> None:
 
 @websocket_api.websocket_command(
     {
-        vol.Required("type"): "siipet/calendar",
-        vol.Required("month"): _month,
-        vol.Optional("cat"): cv.string,
+        probatio.Required("type"): "siipet/calendar",
+        probatio.Required("month"): _month,
+        probatio.Optional("cat"): cv.string,
     }
 )
 @websocket_api.async_response
@@ -256,9 +256,9 @@ async def ws_calendar(
 
 @websocket_api.websocket_command(
     {
-        vol.Required("type"): "siipet/day",
-        vol.Required("date"): cv.date,
-        vol.Optional("cat"): cv.string,
+        probatio.Required("type"): "siipet/day",
+        probatio.Required("date"): cv.date,
+        probatio.Optional("cat"): cv.string,
     }
 )
 @websocket_api.async_response
@@ -288,7 +288,7 @@ async def ws_day(
     )
 
 
-@websocket_api.websocket_command({vol.Required("type"): "siipet/queue"})
+@websocket_api.websocket_command({probatio.Required("type"): "siipet/queue"})
 @websocket_api.async_response
 @_translated_errors
 async def ws_queue(
@@ -309,7 +309,10 @@ async def ws_queue(
 
 
 @websocket_api.websocket_command(
-    {vol.Required("type"): "siipet/visit", vol.Required("event_id"): cv.string}
+    {
+        probatio.Required("type"): "siipet/visit",
+        probatio.Required("event_id"): cv.string,
+    }
 )
 @websocket_api.async_response
 @_translated_errors

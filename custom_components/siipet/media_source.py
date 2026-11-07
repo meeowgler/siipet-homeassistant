@@ -1,4 +1,4 @@
-"""Media source for SiiPet cloud recordings."""
+"""Media source for SiiPet cloud recordings and visit images."""
 
 from __future__ import annotations
 
@@ -7,6 +7,7 @@ from datetime import date, timedelta
 from homeassistant.components.media_player import BrowseError, MediaClass
 from homeassistant.components.media_source import (
     BrowseMediaSource,
+    MediaImage,
     MediaSource,
     MediaSourceItem,
     PlayMedia,
@@ -46,7 +47,7 @@ def visit_title(data: SiiPetData, visit: Visit) -> str:
 
 
 class SiiPetMediaSource(MediaSource):
-    """Browse and play the cloud recordings of SiiPet visits."""
+    """Browse and play the cloud recordings of SiiPet visits, and read their images."""
 
     name = "SiiPet"
 
@@ -64,7 +65,8 @@ class SiiPetMediaSource(MediaSource):
         media = self._media()
         if media is None:
             raise Unresolvable("SiiPet is not loaded")
-        kind, _, item_id = item.identifier.partition("/")
+        # The root has no identifier.
+        kind, _, item_id = (item.identifier or "").partition("/")
         if not item_id:
             raise Unresolvable("Unknown SiiPet media item")
         try:
@@ -78,6 +80,28 @@ class SiiPetMediaSource(MediaSource):
         except MediaError as err:
             raise Unresolvable(str(err)) from err
         return PlayMedia(image_path(image_kind, item_id), "image/jpeg")
+
+    async def async_get_media_image(self, item: MediaSourceItem) -> MediaImage | None:
+        """Return the bytes of an image, so that AI Task can attach it.
+
+        A recording, a folder, and an unknown item have no single image.
+        """
+        # The root has no identifier.
+        kind, _, item_id = (item.identifier or "").partition("/")
+        try:
+            image_kind = MediaKind(kind)
+        except ValueError:
+            return None
+        if not item_id:
+            return None
+        media = self._media()
+        if media is None:
+            raise Unresolvable("SiiPet is not loaded")
+        try:
+            content = await media.async_read_image(image_kind, item_id)
+        except MediaError as err:
+            raise Unresolvable(str(err)) from err
+        return MediaImage(content=content, mime_type="image/jpeg")
 
     async def async_browse_media(self, item: MediaSourceItem) -> BrowseMediaSource:
         """Browse the last 30 days, then the visits of one day."""

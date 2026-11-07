@@ -15,7 +15,7 @@ from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.util import dt as dt_util
-import voluptuous as vol
+import probatio
 
 from .api import (
     SiiPetApiError,
@@ -60,29 +60,31 @@ VISIT_TYPES = {
     "lingering": VisitType.LINGERING,
 }
 
-LIST_VISITS_SCHEMA = vol.Schema(
+LIST_VISITS_SCHEMA = probatio.Schema(
     {
-        vol.Optional(ATTR_DATE): cv.date,
-        vol.Optional(ATTR_DAYS, default=1): vol.All(
-            vol.Coerce(int), vol.Range(min=1, max=7)
+        probatio.Optional(ATTR_DATE): cv.date,
+        probatio.Optional(ATTR_DAYS, default=1): probatio.All(
+            probatio.Coerce(int), probatio.Range(min=1, max=7)
         ),
-        vol.Optional(ATTR_CAT): cv.string,
+        probatio.Optional(ATTR_CAT): cv.string,
     }
 )
 
 
-UPDATE_VISIT_SCHEMA = vol.Schema(
+UPDATE_VISIT_SCHEMA = probatio.Schema(
     {
-        vol.Required(ATTR_EVENT_ID): cv.string,
-        vol.Optional(ATTR_CATS): vol.All(
-            cv.ensure_list, [cv.string], vol.Length(min=1)
+        probatio.Required(ATTR_EVENT_ID): cv.string,
+        probatio.Optional(ATTR_CATS): probatio.All(
+            cv.ensure_list, [cv.string], probatio.Length(min=1)
         ),
-        vol.Optional(ATTR_TYPE): vol.In(list(VISIT_TYPES)),
-        vol.Optional(ATTR_NOTE): vol.All(cv.string, vol.Length(max=NOTE_MAX_LENGTH)),
+        probatio.Optional(ATTR_TYPE): probatio.In(list(VISIT_TYPES)),
+        probatio.Optional(ATTR_NOTE): probatio.All(
+            cv.string, probatio.Length(max=NOTE_MAX_LENGTH)
+        ),
     }
 )
 
-DELETE_VISIT_SCHEMA = vol.Schema({vol.Required(ATTR_EVENT_ID): cv.string})
+DELETE_VISIT_SCHEMA = probatio.Schema({probatio.Required(ATTR_EVENT_ID): cv.string})
 
 
 @callback

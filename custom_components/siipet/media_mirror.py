@@ -106,12 +106,15 @@ def _visit_jobs(visit: Visit, day: date) -> list[_Job]:
 
 
 @callback
-def async_raise_issue(hass: HomeAssistant, issue_id: str) -> None:
-    """Show a repair issue of the local media copy."""
+def async_raise_issue(
+    hass: HomeAssistant, entry: SiiPetConfigEntry, issue_id: str
+) -> None:
+    """Show a repair issue of the local media copy. It goes with the entry."""
     ir.async_create_issue(
         hass,
         DOMAIN,
         issue_id,
+        config_entry_id=entry.entry_id,
         is_fixable=False,
         severity=ir.IssueSeverity.WARNING,
         translation_key=issue_id,
@@ -374,7 +377,7 @@ class SiiPetMirror:
         if not self._disk_full:
             _LOGGER.warning("SiiPet paused the local media copy: the disk is full")
             self._disk_full = True
-        async_raise_issue(self.hass, ISSUE_DISK_FULL)
+        async_raise_issue(self.hass, self.entry, ISSUE_DISK_FULL)
 
     async def _async_download(self, job: _Job) -> bool:
         """Download one file. Return False when the run has to stop."""
@@ -443,7 +446,7 @@ class SiiPetMirror:
         _LOGGER.warning("SiiPet stopped the local media copy: %s", err)
         self._stopped = True
         self._pending.clear()
-        async_raise_issue(self.hass, ISSUE_FOLDER)
+        async_raise_issue(self.hass, self.entry, ISSUE_FOLDER)
 
     async def _async_backfill(self) -> None:
         """Queue the missing media of every day in the window."""

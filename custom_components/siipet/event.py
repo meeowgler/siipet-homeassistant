@@ -39,14 +39,16 @@ class SiiPetVisitEvent(SiiPetCatEntity, EventEntity):
         """Fire the new visits of the update that added this entity."""
         await super().async_added_to_hass()
         data = self.coordinator.data
-        if data is self._handled_data:
-            # A rename adds the same entity again.
-            return
         self._handled_data = data
         # Home Assistant drops state writes until the entity is fully added,
         # so fire on the next loop iteration.
         handle = self.hass.loop.call_soon(self._fire_new_visits, data)
         self.async_on_remove(handle.cancel)
+
+    @callback
+    def async_entity_id_changed(self, old_entity_id: str) -> None:
+        """Keep the entity added. Nothing here depends on the entity id."""
+        super().async_entity_id_changed(old_entity_id)
 
     @callback
     def _handle_coordinator_update(self) -> None:

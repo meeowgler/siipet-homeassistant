@@ -58,7 +58,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     return True
 
 
-async def async_setup_entry(hass: HomeAssistant, entry: SiiPetConfigEntry) -> bool:
+async def async_setup_entry(hass: HomeAssistant, entry: SiiPetConfigEntry) -> None:
     """Set up SiiPet from a config entry."""
     if any(key not in entry.data for key in SESSION_KEYS):
         raise ConfigEntryError(
@@ -101,7 +101,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: SiiPetConfigEntry) -> bo
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     device_state.async_start()
     entry.runtime_data.mirror = await _async_start_mirror(hass, entry)
-    return True
 
 
 async def _async_start_mirror(
@@ -122,7 +121,7 @@ async def _async_start_mirror(
         await store.async_load()
     except MediaStoreError as err:
         _LOGGER.warning("SiiPet cannot keep a local media copy: %s", err)
-        async_raise_issue(hass, ISSUE_FOLDER)
+        async_raise_issue(hass, entry, ISSUE_FOLDER)
         return None
     async_clear_issues(hass)
     runtime = entry.runtime_data
@@ -132,14 +131,13 @@ async def _async_start_mirror(
     return mirror
 
 
-async def async_unload_entry(hass: HomeAssistant, entry: SiiPetConfigEntry) -> bool:
+async def async_unload_entry(hass: HomeAssistant, entry: SiiPetConfigEntry) -> None:
     """Unload a SiiPet config entry."""
-    return await hass.config_entries.async_unload_platforms(entry, PLATFORMS)
+    await hass.config_entries.async_unload_platforms_or_raise(entry, PLATFORMS)
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: SiiPetConfigEntry) -> None:
     """Delete the local media copy of a removed entry."""
-    async_clear_issues(hass)
     if (root := media_root(hass)) is not None:
         await async_delete_folder(hass, root)
 

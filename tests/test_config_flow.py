@@ -11,6 +11,8 @@ from homeassistant.config_entries import SOURCE_USER
 from homeassistant.const import CONF_EMAIL, CONF_PASSWORD
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType, InvalidData
+import probatio
+from probatio.humanize import humanize_error
 import pytest
 from pytest_homeassistant.common import MockConfigEntry
 
@@ -22,6 +24,7 @@ from custom_components.siipet.api import (
     SiiPetError,
 )
 from custom_components.siipet.api.client import WRONG_CODE
+from custom_components.siipet.config_flow import CODE_SCHEMA, EMAIL_SCHEMA
 from custom_components.siipet.const import (
     AUTH_EMAIL,
     AUTH_PASSWORD,
@@ -47,7 +50,7 @@ PHONE_DEVICE = "phone-device-0001"
 def mock_setup_entry() -> Generator[AsyncMock]:
     """Do not set up the entry that a flow creates or reloads."""
     with patch(
-        "custom_components.siipet.async_setup_entry", return_value=True
+        "custom_components.siipet.async_setup_entry", return_value=None
     ) as setup_entry:
         yield setup_entry
 
@@ -265,7 +268,7 @@ async def test_reauth_email(
     mock_client: AsyncMock,
     config_entry: MockConfigEntry,
 ) -> None:
-    """Email reauth suggests the stored address and keeps the client id."""
+    """Email reauth suggests the address, keeps the client id, and shows our text."""
     mock_client.login.return_value = Session(NEW_TOKEN, 1_800_000_000_000)
     result = await _start_reauth(hass, config_entry)
     assert _suggested(result, CONF_EMAIL) == "cat@example.com"
@@ -281,6 +284,7 @@ async def test_reauth_email(
     )
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reauth_successful"
+    assert "translation_domain" not in result
     assert config_entry.data[CONF_TOKEN] == NEW_TOKEN
     assert config_entry.data[CONF_EXPIRE_AT] == 1_800_000_000_000
     assert config_entry.data[CONF_CLIENT_ID] == "client-uuid-0001"
@@ -353,7 +357,7 @@ async def test_reconfigure_email_entry(
     mock_setup_entry: AsyncMock,
     config_entry: MockConfigEntry,
 ) -> None:
-    """Reconfigure stores the new session, keeps the client id, and reloads."""
+    """Reconfigure stores the session, keeps the client id, reloads, shows our text."""
     mock_client.login.return_value = Session(NEW_TOKEN, 1_800_000_000_000)
     result = await _start_reconfigure(hass, config_entry)
     assert _suggested(result, CONF_EMAIL) == "cat@example.com"
@@ -361,6 +365,7 @@ async def test_reconfigure_email_entry(
     result = await _sign_in(hass, result["flow_id"])
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "reconfigure_successful"
+    assert "translation_domain" not in result
     assert config_entry.data == {
         CONF_AUTH_METHOD: AUTH_EMAIL,
         CONF_EMAIL: "cat@example.com",
@@ -771,3 +776,19 @@ async def test_new_password_for_token_entry_needs_code_sign_in(
     assert result["reason"] == reason
     assert token_entry.data[CONF_EMAIL] == "cat@example.com"
     assert CONF_PASSWORD_HASH not in token_entry.data
+
+
+@pytest.mark.parametrize(
+    ("schema", "user_input"),
+    [
+        (EMAIL_SCHEMA, {CONF_EMAIL: "cat@example.com", CONF_PASSWORD: ["secret-1"]}),
+        (CODE_SCHEMA, {CONF_CODE: "012345", CONF_NEW_PASSWORD: ["secret-1"]}),
+    ],
+)
+def test_password_errors_are_redacted(
+    schema: probatio.Schema, user_input: dict[str, Any]
+) -> None:
+    """A validation error of a password field keeps the value out of its message."""
+    with pytest.raises(probatio.Invalid) as err:
+        schema(user_input)
+    assert "secret-1" not in humanize_error(user_input, err.value)

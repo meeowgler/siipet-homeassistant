@@ -19,12 +19,12 @@ from homeassistant.exceptions import (
     Unauthorized,
 )
 from homeassistant.helpers import area_registry as ar, device_registry as dr
+import probatio
 import pytest
 from pytest_homeassistant.common import MockConfigEntry
 from pytest_homeassistant.test_util.aiohttp import (
     AiohttpClientMocker,
 )
-import voluptuous as vol
 
 from custom_components.siipet.api import (
     SiiPetApiError,
@@ -219,7 +219,7 @@ async def test_list_visits_days_out_of_range(
 ) -> None:
     """The schema refuses days outside 1 to 7."""
     await setup_integration(hass, config_entry)
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         await _list(hass, days=days)
 
 
@@ -424,7 +424,7 @@ async def test_update_schema(
 ) -> None:
     """The schema refuses a long memo, an empty cats list, and an unsupported type."""
     await setup_integration(hass, config_entry)
-    with pytest.raises(vol.Invalid):
+    with pytest.raises(probatio.Invalid):
         await _update(hass, event_id="ev-1", **data)
 
 
