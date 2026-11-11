@@ -3,12 +3,17 @@
 from .auth import Session, hash_password
 from .client import SiiPetClient
 from .errors import (
+    LrtmError,
+    LrtmServerError,
+    LrtmTransportError,
+    SettingUnavailableError,
+    ShadowWriteError,
     SiiPetApiError,
     SiiPetAuthError,
     SiiPetConnectionError,
     SiiPetError,
 )
-from .lrtm import LrtmControl, LrtmError
+from .lrtm import LrtmControl
 from .models import (
     AbnormalLabels,
     CalendarDay,
@@ -36,8 +41,12 @@ __all__ = [
     "IotCredentials",
     "LrtmControl",
     "LrtmError",
+    "LrtmServerError",
+    "LrtmTransportError",
     "MediaCredentials",
     "Session",
+    "SettingUnavailableError",
+    "ShadowWriteError",
     "SiiPetApiError",
     "SiiPetAuthError",
     "SiiPetClient",

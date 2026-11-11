@@ -110,6 +110,27 @@
     "edit_not_applied": {
       "message": "SiiPet nie zastosował zmiany wizyty {event_id}. Sprawdź wizytę w aplikacji SiiPet."
     },
+    "camera_offline": {
+      "message": "Kamera {camera} jest offline. Spróbuj ponownie, gdy będzie online."
+    },
+    "setting_not_supported": {
+      "message": "Oprogramowanie kamery {camera} nie obsługuje tego ustawienia."
+    },
+    "setting_unknown": {
+      "message": "Kamera {camera} nie zgłosiła jeszcze tego ustawienia. Spróbuj ponownie później."
+    },
+    "connection_not_ready": {
+      "message": "Połączenie z kamerami SiiPet nie działa. Spróbuj ponownie za kilka minut."
+    },
+    "change_not_sent": {
+      "message": "SiiPet nie przyjął zmiany dla kamery {camera}: {error}"
+    },
+    "change_partial": {
+      "message": "SiiPet zapisał zmianę dla kamery {camera}, ale nie mógł wysłać jej do kamery: {error}. Kamera może zastosować ją później."
+    },
+    "change_not_confirmed": {
+      "message": "Kamera {camera} nie potwierdziła zmiany w ciągu {seconds} s. Może jeszcze ją zastosować."
+    },
     "control_failed": {
       "message": "SiiPet nie przyjął zmiany. Urządzenie może być offline; spróbuj ponownie."
     }

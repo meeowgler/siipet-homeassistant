@@ -110,6 +110,27 @@
     "edit_not_applied": {
       "message": "SiiPet did not apply the change to visit {event_id}. Check the visit in the SiiPet app."
     },
+    "camera_offline": {
+      "message": "{camera} is offline. Try again when it is online."
+    },
+    "setting_not_supported": {
+      "message": "The firmware of {camera} does not support this setting."
+    },
+    "setting_unknown": {
+      "message": "{camera} has not reported this setting yet. Try again later."
+    },
+    "connection_not_ready": {
+      "message": "The connection to the SiiPet cameras is down. Try again in a few minutes."
+    },
+    "change_not_sent": {
+      "message": "SiiPet did not accept the change for {camera}: {error}"
+    },
+    "change_partial": {
+      "message": "SiiPet saved the change for {camera}, but could not send it to the camera: {error}. The camera may apply it later."
+    },
+    "change_not_confirmed": {
+      "message": "{camera} did not confirm the change in {seconds} seconds. It may still apply it."
+    },
     "control_failed": {
       "message": "SiiPet did not accept the change. It may be offline; try again."
     }

@@ -22,7 +22,7 @@ import uuid
 import aiohttp
 
 from .auth import Session
-from .errors import SiiPetError
+from .errors import LrtmError
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -32,10 +32,6 @@ REQUEST_CHANNEL = "device:joy1:{sn}:app:dev:request"
 PROTOCOL = ("centrifuge-protocol-v2",)
 CONNECT_TIMEOUT = 15.0
 COMMAND_TIMEOUT = 15.0
-
-
-class LrtmError(SiiPetError):
-    """The realtime connection failed, timed out, closed, or returned an error."""
 
 
 def encode_command(command_id: int, method: str, params: dict[str, Any]) -> str:
