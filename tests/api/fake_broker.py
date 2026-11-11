@@ -72,6 +72,7 @@ class FakeBroker:
     reject_get: set[str] = field(default_factory=set)
     silent_get: set[str] = field(default_factory=set)
     silent_subscribe: set[str] = field(default_factory=set)
+    silent_topics: set[str] = field(default_factory=set)
     close_on_subscribe: set[str] = field(default_factory=set)
     reject_update: set[str] = field(default_factory=set)
     silent_update: set[str] = field(default_factory=set)
@@ -128,6 +129,8 @@ class FakeBroker:
                 index += 1
                 topics.append(topic)
             if any(_serial(topic) in self.silent_subscribe for topic in topics):
+                return True
+            if any(topic in self.silent_topics for topic in topics):
                 return True
             if any(topic in self.close_on_subscribe for topic in topics):
                 return False

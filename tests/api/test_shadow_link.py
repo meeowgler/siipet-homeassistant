@@ -21,6 +21,7 @@ from custom_components.siipet.api import (
     ShadowWriteError,
     SiiPetAuthError,
 )
+from custom_components.siipet.api.mqtt import MqttSession
 from custom_components.siipet.api.shadow_link import (
     LinkTimings,
     ShadowLink,
@@ -592,7 +593,7 @@ async def test_update_desired_accepted() -> None:
     async with _running(_broker()) as running:
         await _started(running)
         result = await running.link.update_desired(
-            "SN0001", "fillLight", {"level": 3}, timeout=1
+            "SN0001", "fillLight", {"level": 3}, limit=1
         )
         assert result is WriteResult.ACCEPTED
         [(topic, body)] = running.broker.updates
@@ -607,7 +608,7 @@ async def test_update_desired_rejected(caplog: pytest.LogCaptureFixture) -> None
     async with _running(_broker(reject_update={"SN0001"})) as running:
         await _started(running)
         with pytest.raises(ShadowWriteError) as err:
-            await running.link.update_desired("SN0001", "pir", {"level": 2}, timeout=1)
+            await running.link.update_desired("SN0001", "pir", {"level": 2}, limit=1)
         assert err.value.reason == "rejected"
         assert "SN0001" in running.recorder.states
         assert running.recorder.dropped == []
@@ -621,20 +622,29 @@ async def test_update_desired_unconfirmed_on_silence() -> None:
     async with _running(_broker(silent_update={"SN0001"})) as running:
         await _started(running)
         result = await running.link.update_desired(
-            "SN0001", "pir", {"level": 2}, timeout=0.2
+            "SN0001", "pir", {"level": 2}, limit=0.2
         )
         assert result is WriteResult.UNCONFIRMED
 
 
 async def test_update_desired_unconfirmed_when_the_connection_drops() -> None:
-    """A dropped connection after the publish is unconfirmed, and the link reconnects."""
+    """A drop after the publish is unconfirmed, and the camera comes back read-only."""
     async with _running(_broker(close_on_update={"SN0001"})) as running:
         await _started(running)
         result = await running.link.update_desired(
-            "SN0001", "pir", {"level": 2}, timeout=1
+            "SN0001", "pir", {"level": 2}, limit=1
         )
         assert result is WriteResult.UNCONFIRMED
-        await _until(lambda: len(running.broker.connections) == 2)
+        await _until(lambda: running.recorder.connection == [True, False, True])
+        second = running.broker.connections[1]
+        read = shadow_topic("SN0001", "fake_configInfo", "get/accepted")
+        assert read in second.subscriptions
+        assert f"{UPDATE}/accepted" not in second.subscriptions
+        assert not running.link.can_write("SN0001")
+        assert running.link.can_write("SN0002")
+        assert running.recorder.dropped == []
+        assert running.link.status.denied_cameras == 0
+        assert len(running.broker.connections) == 2
 
 
 async def test_update_desired_ignores_other_tokens() -> None:
@@ -642,7 +652,7 @@ async def test_update_desired_ignores_other_tokens() -> None:
     async with _running(_broker(silent_update={"SN0001"})) as running:
         await _started(running)
         write = asyncio.create_task(
-            running.link.update_desired("SN0001", "pir", {"level": 2}, timeout=0.3)
+            running.link.update_desired("SN0001", "pir", {"level": 2}, limit=0.3)
         )
         await _until(lambda: running.broker.updates)
         await running.broker.push(
@@ -655,13 +665,12 @@ async def test_refused_update_replies_keep_the_reads() -> None:
     """AWS IoT may refuse the update replies. The camera keeps its state but cannot be written."""
     refused = {f"{UPDATE}/accepted", f"{UPDATE}/rejected"}
     async with _running(_broker(deny_topics=refused)) as running:
-        await _until(lambda: "SN0001" in running.recorder.states)
-        await asyncio.sleep(0.2)
+        await _until(lambda: running.recorder.connection == [True])
         assert not running.link.can_write("SN0001")
         assert "SN0001" in running.recorder.states
         assert running.recorder.dropped == []
         with pytest.raises(ShadowWriteError) as err:
-            await running.link.update_desired("SN0001", "pir", {"level": 2}, timeout=1)
+            await running.link.update_desired("SN0001", "pir", {"level": 2}, limit=1)
         assert err.value.reason == "not_ready"
         assert running.broker.updates == []
 
@@ -674,7 +683,7 @@ async def test_cannot_write_without_a_connection() -> None:
     link.set_cameras(CAMERAS)
     assert not link.can_write("SN0001")
     with pytest.raises(ShadowWriteError) as err:
-        await link.update_desired("SN0001", "pir", {"level": 2}, timeout=1)
+        await link.update_desired("SN0001", "pir", {"level": 2}, limit=1)
     assert err.value.reason == "not_ready"
 
 
@@ -682,7 +691,8 @@ async def test_error_after_the_reads_is_no_strike() -> None:
     """An error in the write reply subscription does not count toward a denial."""
     broker = _broker(close_on_subscribe={f"{UPDATE}/accepted"})
     # A long backoff lets the test change the broker before the next connection.
-    timings = replace(FAST, backoff=(0.3, 0.3))
+    # A short retry ends the pause of the writes before the third connection.
+    timings = replace(FAST, backoff=(0.3, 0.3), denied_retry=timedelta(seconds=0.2))
     async with _running(
         broker, cameras={"SN0001": SHADOWS}, timings=timings
     ) as running:
@@ -693,3 +703,82 @@ async def test_error_after_the_reads_is_no_strike() -> None:
         assert running.link.status.denied_cameras == 0
         assert running.recorder.dropped == []
         assert len(broker.connections) == 3
+
+
+@pytest.mark.parametrize(
+    ("failure", "connections"), [("silent_topics", 1), ("close_on_subscribe", 3)]
+)
+async def test_failed_write_replies_keep_the_reads(
+    failure: str, connections: int
+) -> None:
+    """A write reply subscription with no answer, or one that drops the connection, leaves the cameras read-only."""
+    replies = {shadow_topic(sn, "fake_configInfo", "update/accepted") for sn in CAMERAS}
+    broker = _broker(**{failure: replies})
+    async with _running(broker) as running:
+        await _until(lambda: running.recorder.connection == [True])
+        assert set(running.recorder.states) == {"SN0001", "SN0002"}
+        assert running.recorder.dropped == []
+        assert running.link.status.denied_cameras == 0
+        assert not running.link.can_write("SN0001")
+        assert not running.link.can_write("SN0002")
+        assert len(broker.connections) == connections
+
+
+async def test_write_on_a_closed_connection_is_not_sent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A write whose connection closes before the publish sends nothing and keeps the camera writable."""
+    publish = MqttSession.publish
+
+    async def close_first(self: MqttSession, topic: str, payload: bytes = b"") -> None:
+        if topic.endswith("/update"):
+            await self.close()
+        await publish(self, topic, payload)
+
+    async with _running(_broker()) as running:
+        await _started(running)
+        monkeypatch.setattr(MqttSession, "publish", close_first)
+        with pytest.raises(ShadowWriteError) as err:
+            await running.link.update_desired("SN0001", "pir", {"level": 2}, limit=1)
+        assert err.value.reason == "not_ready"
+        assert running.broker.updates == []
+        await _until(
+            lambda: (
+                len(running.broker.connections) == 2
+                and running.link.can_write("SN0001")
+            )
+        )
+
+
+async def test_no_write_while_the_link_stops() -> None:
+    """Once stop() begins, the link sends no write."""
+    async with _running(_broker()) as running:
+        await _started(running)
+        stopping = asyncio.create_task(running.link.stop())
+        await asyncio.sleep(0)
+        assert running.link.status.connected
+        assert not running.link.can_write("SN0001")
+        with pytest.raises(ShadowWriteError) as err:
+            await running.link.update_desired("SN0001", "pir", {"level": 2}, limit=1)
+        assert err.value.reason == "not_ready"
+        await stopping
+        assert running.broker.updates == []
+
+
+@pytest.mark.parametrize("limit", [0, -1])
+async def test_spent_limit_sends_nothing(limit: float) -> None:
+    """A write with no time left raises not_ready and publishes nothing."""
+    async with _running(_broker()) as running:
+        await _started(running)
+        with pytest.raises(ShadowWriteError) as err:
+            await running.link.update_desired(
+                "SN0001", "pir", {"level": 2}, limit=limit
+            )
+        assert err.value.reason == "not_ready"
+        # Messages on one connection keep their order, so a later write that
+        # is accepted shows that the first one sent nothing.
+        result = await running.link.update_desired(
+            "SN0001", "pir", {"level": 2}, limit=1
+        )
+        assert result is WriteResult.ACCEPTED
+        assert len(running.broker.updates) == 1
