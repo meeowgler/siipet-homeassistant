@@ -7,13 +7,15 @@ from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 import json
 import logging
+from typing import Any
 from uuid import uuid4
 
 import aiohttp
 
-from .errors import SiiPetError
+from .errors import ShadowWriteError, SiiPetError
 from .models import (
     CONFIG_SHADOW,
     SHADOW_KINDS,
@@ -33,8 +35,20 @@ ACCEPTED = "get/accepted"
 REJECTED = "get/rejected"
 DOCUMENTS = "update/documents"
 REPLIES = (ACCEPTED, REJECTED, DOCUMENTS)
+UPDATE_ACCEPTED = "update/accepted"
+UPDATE_REJECTED = "update/rejected"
+UPDATE_REPLIES = (UPDATE_ACCEPTED, UPDATE_REJECTED)
 # Failed starts in a row that deny a camera.
 DENY_STRIKES = 2
+
+
+class WriteResult(StrEnum):
+    """The answer of AWS IoT to a desired write."""
+
+    ACCEPTED = "accepted"
+    # No answer in time, or the connection dropped after the publish. The app
+    # does not wait for an answer either, so the change goes on.
+    UNCONFIRMED = "unconfirmed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +142,8 @@ class ShadowLink:
         self._versions: dict[tuple[str, str], int] = {}
         self._pending: dict[tuple[str, str], asyncio.Future[None]] = {}
         self._started: set[str] = set()
+        self._writable: set[str] = set()
+        self._writes: dict[str, asyncio.Future[bool]] = {}
         self._denied: dict[str, datetime] = {}
         self._denied_logged: set[str] = set()
         self._callback_warned: set[str] = set()
@@ -168,6 +184,10 @@ class ShadowLink:
             for sn, shadows in self._cameras.items()
             for kind in SHADOW_KINDS
             for suffix in REPLIES
+        } | {
+            shadow_topic(sn, shadows.config, suffix): (sn, CONFIG_SHADOW, suffix)
+            for sn, shadows in self._cameras.items()
+            for suffix in UPDATE_REPLIES
         }
 
     async def run(self) -> None:
@@ -223,6 +243,7 @@ class ShadowLink:
         session = MqttSession(ws, self._handle_message, write_limit=self._timings.reply)
         self._session = session
         self._started.clear()
+        self._writable.clear()
         try:
             await session.connect(
                 f"{credentials.identity_id}:{uuid4().hex}",
@@ -294,11 +315,11 @@ class ShadowLink:
     async def _start_camera(
         self, session: MqttSession, sn: str, shadows: CameraShadows
     ) -> None:
-        """Subscribe to the replies of both shadows, then read both.
+        """Subscribe to the replies of both shadows, read both, then subscribe to the write replies.
 
-        A refused subscription denies the camera at once. An MqttError is a
-        strike, and `DENY_STRIKES` strikes in a row deny the camera. The error
-        still ends the connection.
+        A refused read subscription denies the camera at once. An MqttError
+        before the reads finish is a strike, and `DENY_STRIKES` strikes in a
+        row deny the camera. The error still ends the connection.
         """
         # A retry after the denied wait starts clean, so its replies are read.
         self._denied.pop(sn, None)
@@ -306,8 +327,14 @@ class ShadowLink:
             await self._subscribe_and_read(session, sn, shadows)
         except MqttError:
             # A camera that set_cameras replaced or removed gets no strike, and
-            # neither does one that stop() interrupted.
-            if not self._stopping and self._cameras.get(sn) == shadows:
+            # neither does one that stop() interrupted. An error after the reads
+            # finished comes from the write reply subscription, so it is no
+            # strike against the reads.
+            if (
+                not self._stopping
+                and self._cameras.get(sn) == shadows
+                and sn not in self._started
+            ):
                 self._strike(sn)
             raise
 
@@ -343,6 +370,77 @@ class ShadowLink:
             self._denied_logged.discard(sn)
             self._strikes.pop(sn, None)
             self._started.add(sn)
+            await self._subscribe_updates(session, sn, shadows)
+
+    async def _subscribe_updates(
+        self, session: MqttSession, sn: str, shadows: CameraShadows
+    ) -> None:
+        """Subscribe to the replies of desired writes.
+
+        AWS IoT can refuse these topics to an account that may read. A refusal
+        only means that the camera cannot be written, so it never denies the
+        camera.
+        """
+        topics = [shadow_topic(sn, shadows.config, suffix) for suffix in UPDATE_REPLIES]
+        granted = await session.subscribe(topics, self._timings.reply)
+        if all(granted) and self._cameras.get(sn) == shadows:
+            self._writable.add(sn)
+        elif not all(granted):
+            _LOGGER.debug("SiiPet refused the write replies of %s", self._label(sn))
+
+    def can_write(self, sn: str) -> bool:
+        """True while the link is connected and can confirm writes for the camera."""
+        return self._connected and self._session is not None and sn in self._writable
+
+    async def update_desired(
+        self,
+        sn: str,
+        key: str,
+        value: Mapping[str, Any],
+        *,
+        # A write that runs out of time returns UNCONFIRMED, so the method
+        # keeps the deadline itself.
+        timeout: float,  # noqa: ASYNC109
+    ) -> WriteResult:
+        """Write `{key: value}` to the desired state of the camera's config shadow.
+
+        Raise ShadowWriteError("not_ready") before publishing when the camera
+        cannot be written, and ShadowWriteError("rejected") when AWS IoT
+        rejects the write.
+        """
+        session = self._session
+        shadows = self._cameras.get(sn)
+        if session is None or shadows is None or not self.can_write(sn):
+            raise ShadowWriteError("not_ready")
+        token = uuid4().hex
+        future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+        done: set[asyncio.Future[Any]] = set()
+        self._writes[token] = future
+        body = json.dumps(
+            {"state": {"desired": {key: value}}, "clientToken": token},
+            separators=(",", ":"),
+        ).encode()
+        try:
+            async with asyncio.timeout(timeout):
+                await session.publish(shadow_topic(sn, shadows.config, "update"), body)
+                closed = asyncio.ensure_future(session.wait_closed())
+                try:
+                    done, _pending = await asyncio.wait(
+                        {future, closed}, return_when=asyncio.FIRST_COMPLETED
+                    )
+                finally:
+                    closed.cancel()
+                    with suppress(asyncio.CancelledError):
+                        await closed
+        except TimeoutError, MqttError:
+            return WriteResult.UNCONFIRMED
+        finally:
+            self._writes.pop(token, None)
+        if future not in done:
+            return WriteResult.UNCONFIRMED
+        if not future.result():
+            raise ShadowWriteError("rejected")
+        return WriteResult.ACCEPTED
 
     def _strike(self, sn: str) -> None:
         strikes = self._strikes.get(sn, 0) + 1
@@ -389,6 +487,9 @@ class ShadowLink:
             return
         sn, kind, suffix = target
         self._last_message = self._clock()
+        if suffix in UPDATE_REPLIES:
+            self._answer_write(payload, accepted=suffix == UPDATE_ACCEPTED)
+            return
         if sn in self._denied:
             # A partial SUBACK can leave a granted topic subscribed, but a
             # denied camera keeps no state until its retry starts clean.
@@ -422,6 +523,15 @@ class ShadowLink:
             )
         if suffix == ACCEPTED:
             self._resolve(sn, kind)
+
+    def _answer_write(self, payload: bytes, *, accepted: bool) -> None:
+        try:
+            token = json.loads(payload).get("clientToken")
+        except ValueError, AttributeError:
+            return
+        future = self._writes.get(token) if isinstance(token, str) else None
+        if future is not None and not future.done():
+            future.set_result(accepted)
 
     def _notify(self, sn: str, state: DeviceState | None) -> None:
         """Call `on_state`. An error in it does not end the connection."""
@@ -461,6 +571,7 @@ class ShadowLink:
         """Skip the camera for the retry time, and drop its state."""
         self._denied[sn] = self._clock()
         self._started.discard(sn)
+        self._writable.discard(sn)
         self._strikes.pop(sn, None)
         self._parts.pop(sn, None)
         for kind in SHADOW_KINDS:
@@ -482,6 +593,7 @@ class ShadowLink:
     def _forget(self, sn: str) -> None:
         self._parts.pop(sn, None)
         self._started.discard(sn)
+        self._writable.discard(sn)
         self._denied.pop(sn, None)
         self._denied_logged.discard(sn)
         self._callback_warned.discard(sn)

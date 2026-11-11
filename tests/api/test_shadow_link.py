@@ -18,11 +18,13 @@ from custom_components.siipet.api import (
     CameraShadows,
     DeviceState,
     IotCredentials,
+    ShadowWriteError,
     SiiPetAuthError,
 )
 from custom_components.siipet.api.shadow_link import (
     LinkTimings,
     ShadowLink,
+    WriteResult,
     shadow_topic,
 )
 
@@ -576,3 +578,118 @@ async def test_stop() -> None:
         assert broker.connections[0].disconnected
         assert running.recorder.connection == [True]
         assert not running.link.status.connected
+
+
+UPDATE = shadow_topic("SN0001", "fake_configInfo", "update")
+
+
+async def _started(running: Running, sn: str = "SN0001") -> None:
+    await _until(lambda: sn in running.recorder.states and running.link.can_write(sn))
+
+
+async def test_update_desired_accepted() -> None:
+    """A desired write goes to the config shadow with a client token and is accepted."""
+    async with _running(_broker()) as running:
+        await _started(running)
+        result = await running.link.update_desired(
+            "SN0001", "fillLight", {"level": 3}, timeout=1
+        )
+        assert result is WriteResult.ACCEPTED
+        [(topic, body)] = running.broker.updates
+        assert topic == UPDATE
+        assert body["state"] == {"desired": {"fillLight": {"level": 3}}}
+        assert len(body["clientToken"]) == 32
+
+
+async def test_update_desired_rejected(caplog: pytest.LogCaptureFixture) -> None:
+    """A rejection raises, keeps the camera's state, and logs no topic or token."""
+    caplog.set_level(logging.DEBUG)
+    async with _running(_broker(reject_update={"SN0001"})) as running:
+        await _started(running)
+        with pytest.raises(ShadowWriteError) as err:
+            await running.link.update_desired("SN0001", "pir", {"level": 2}, timeout=1)
+        assert err.value.reason == "rejected"
+        assert "SN0001" in running.recorder.states
+        assert running.recorder.dropped == []
+        token = running.broker.updates[0][1]["clientToken"]
+    for secret in (*PRIVATE, token):
+        assert secret not in caplog.text
+
+
+async def test_update_desired_unconfirmed_on_silence() -> None:
+    """Without an answer the write counts as unconfirmed, as the app's QoS 0 publish."""
+    async with _running(_broker(silent_update={"SN0001"})) as running:
+        await _started(running)
+        result = await running.link.update_desired(
+            "SN0001", "pir", {"level": 2}, timeout=0.2
+        )
+        assert result is WriteResult.UNCONFIRMED
+
+
+async def test_update_desired_unconfirmed_when_the_connection_drops() -> None:
+    """A dropped connection after the publish is unconfirmed, and the link reconnects."""
+    async with _running(_broker(close_on_update={"SN0001"})) as running:
+        await _started(running)
+        result = await running.link.update_desired(
+            "SN0001", "pir", {"level": 2}, timeout=1
+        )
+        assert result is WriteResult.UNCONFIRMED
+        await _until(lambda: len(running.broker.connections) == 2)
+
+
+async def test_update_desired_ignores_other_tokens() -> None:
+    """A reply for another write does not answer this one."""
+    async with _running(_broker(silent_update={"SN0001"})) as running:
+        await _started(running)
+        write = asyncio.create_task(
+            running.link.update_desired("SN0001", "pir", {"level": 2}, timeout=0.3)
+        )
+        await _until(lambda: running.broker.updates)
+        await running.broker.push(
+            f"{UPDATE}/accepted", {"state": {}, "clientToken": "other"}
+        )
+        assert await write is WriteResult.UNCONFIRMED
+
+
+async def test_refused_update_replies_keep_the_reads() -> None:
+    """AWS IoT may refuse the update replies. The camera keeps its state but cannot be written."""
+    refused = {f"{UPDATE}/accepted", f"{UPDATE}/rejected"}
+    async with _running(_broker(deny_topics=refused)) as running:
+        await _until(lambda: "SN0001" in running.recorder.states)
+        await asyncio.sleep(0.2)
+        assert not running.link.can_write("SN0001")
+        assert "SN0001" in running.recorder.states
+        assert running.recorder.dropped == []
+        with pytest.raises(ShadowWriteError) as err:
+            await running.link.update_desired("SN0001", "pir", {"level": 2}, timeout=1)
+        assert err.value.reason == "not_ready"
+        assert running.broker.updates == []
+
+
+async def test_cannot_write_without_a_connection() -> None:
+    """Before the link connects, nothing is published."""
+    link = ShadowLink(
+        AsyncMock(), AsyncMock(), lambda *_: None, lambda _c: None, NAMES.__getitem__
+    )
+    link.set_cameras(CAMERAS)
+    assert not link.can_write("SN0001")
+    with pytest.raises(ShadowWriteError) as err:
+        await link.update_desired("SN0001", "pir", {"level": 2}, timeout=1)
+    assert err.value.reason == "not_ready"
+
+
+async def test_error_after_the_reads_is_no_strike() -> None:
+    """An error in the write reply subscription does not count toward a denial."""
+    broker = _broker(close_on_subscribe={f"{UPDATE}/accepted"})
+    # A long backoff lets the test change the broker before the next connection.
+    timings = replace(FAST, backoff=(0.3, 0.3))
+    async with _running(
+        broker, cameras={"SN0001": SHADOWS}, timings=timings
+    ) as running:
+        await _until(lambda: broker.connections[0].ws.closed)
+        broker.close_on_subscribe.clear()
+        broker.close_on_get_budget["SN0001"] = 1
+        await _started(running)
+        assert running.link.status.denied_cameras == 0
+        assert running.recorder.dropped == []
+        assert len(broker.connections) == 3

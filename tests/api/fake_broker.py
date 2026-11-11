@@ -72,9 +72,14 @@ class FakeBroker:
     reject_get: set[str] = field(default_factory=set)
     silent_get: set[str] = field(default_factory=set)
     silent_subscribe: set[str] = field(default_factory=set)
+    close_on_subscribe: set[str] = field(default_factory=set)
+    reject_update: set[str] = field(default_factory=set)
+    silent_update: set[str] = field(default_factory=set)
+    close_on_update: set[str] = field(default_factory=set)
     handshake_status: int | None = None
     connections: list[BrokerConnection] = field(default_factory=list)
     gets: list[str] = field(default_factory=list)
+    updates: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
 
     async def handler(self, request: web.Request) -> web.StreamResponse:
         if self.handshake_status is not None:
@@ -124,6 +129,8 @@ class FakeBroker:
                 topics.append(topic)
             if any(_serial(topic) in self.silent_subscribe for topic in topics):
                 return True
+            if any(topic in self.close_on_subscribe for topic in topics):
+                return False
             codes = bytearray()
             for topic in topics:
                 if _serial(topic) in self.deny_subscribe or topic in self.deny_topics:
@@ -134,7 +141,9 @@ class FakeBroker:
             await connection.send(SUBACK, packet_id + bytes(codes))
             return True
         if packet.kind == PUBLISH:
-            topic, _payload = parse_publish(packet)
+            topic, payload = parse_publish(packet)
+            if topic.endswith("/update"):
+                return await self._update(connection, topic, payload)
             return await self._get(connection, topic)
         if packet.kind == PINGREQ:
             if self.answer_ping:
@@ -171,6 +180,33 @@ class FakeBroker:
         if reply in connection.subscriptions:
             await connection.ws.send_bytes(
                 encode_publish(reply, json.dumps(payload).encode())
+            )
+        return True
+
+    async def _update(
+        self, connection: BrokerConnection, topic: str, payload: bytes
+    ) -> bool:
+        body = json.loads(payload)
+        self.updates.append((topic, body))
+        sn = _serial(topic)
+        if sn in self.close_on_update:
+            return False
+        if sn in self.silent_update:
+            return True
+        token = body.get("clientToken")
+        if sn in self.reject_update:
+            reply = f"{topic}/rejected"
+            answer: dict[str, Any] = {
+                "code": 403,
+                "message": f"Not authorized for {topic}",
+                "clientToken": token,
+            }
+        else:
+            reply = f"{topic}/accepted"
+            answer = {"state": body["state"], "version": 7, "clientToken": token}
+        if reply in connection.subscriptions:
+            await connection.ws.send_bytes(
+                encode_publish(reply, json.dumps(answer).encode())
             )
         return True
 
