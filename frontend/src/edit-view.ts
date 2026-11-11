@@ -156,9 +156,13 @@ export class SiiPetVisitEditor extends LitElement {
       .stool-dialog::backdrop {
         background: black;
       }
+      /* In the Home Assistant apps for iOS and macOS, an image can report the
+         size it was first drawn at as its natural size. The stool photo is
+         drawn first as the thumbnail, so the enlarged photo takes the box of
+         the dialog and not a size of its own. */
       .stool-dialog-photo {
-        max-width: 100vw;
-        max-height: 100vh;
+        width: 100%;
+        height: 100%;
         object-fit: contain;
       }
       .stool-dialog-close {

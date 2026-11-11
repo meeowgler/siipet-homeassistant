@@ -143,6 +143,18 @@ describe("edit view", () => {
     expect(inEditor(editor, ".stool-dialog-photo")?.getAttribute("src")).toBe(POOP.stool);
   });
 
+  it("sizes the full screen stool photo to the dialog and keeps it whole", async () => {
+    const editor = await openVisit(await mount(fakeHass()));
+    inEditor(editor, ".stool-row")!.dispatchEvent(new Event("click"));
+    await settle();
+    const computed = getComputedStyle(
+      inEditor(editor, ".stool-dialog-photo") as unknown as HTMLElement,
+    );
+    expect(computed.width).toBe("100%");
+    expect(computed.height).toBe("100%");
+    expect(computed.objectFit).toBe("contain");
+  });
+
   it("opens the stool photo full screen on Enter on its row", async () => {
     const editor = await openVisit(await mount(fakeHass()));
     inEditor(editor, ".stool-row")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
