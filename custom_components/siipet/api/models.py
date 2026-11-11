@@ -428,7 +428,7 @@ _SHADOW_FIELDS: Final[
         "privacy": (("privacyMode", "active"), _as_bool),
         "fill_light": (("fillLight", "level"), _as_int),
         "fill_light_auto": (("fillLight", "autoLight"), _as_bool),
-        "fill_light_low": (("fillLight", "lowLight"), _as_bool),
+        "fill_light_night_vision": (("fillLight", "lowLight"), _as_bool),
         "fill_light_brightness": (("fillLight", "brightness2"), _as_int),
         "motion_level": (("pir", "level"), _as_int),
         "update_mode": (("otaMode", "mode"), _as_int),
@@ -486,7 +486,7 @@ class DeviceState:
     privacy: bool | None = None
     fill_light: int | None = None
     fill_light_auto: bool | None = None
-    fill_light_low: bool | None = None
+    fill_light_night_vision: bool | None = None
     fill_light_brightness: int | None = None
     motion_level: int | None = None
     update_mode: int | None = None
@@ -505,3 +505,76 @@ class DeviceState:
         values = {name: value for part in parts for name, value in part.values.items()}
         stamps = [part.reported_at for part in parts if part.reported_at is not None]
         return cls(**values, reported_at=max(stamps) if stamps else None)
+
+
+def _level_map(value: Any) -> dict[int, int]:
+    """Read a `{"<level>": <int>}` map. Skip keys and values that are not integers."""
+    if not isinstance(value, Mapping):
+        return {}
+    levels: dict[int, int] = {}
+    for key, number in value.items():
+        try:
+            level = int(key)
+        except TypeError, ValueError:
+            continue
+        converted = _as_int(number)
+        if converted is not None:
+            levels[level] = converted
+    return levels
+
+
+@dataclass(frozen=True, slots=True)
+class DeviceSettings:
+    """Per-level values of a camera, from `Data.JOY1SystemConfig` of `device/detail`."""
+
+    fill_light: Mapping[int, int] = field(default_factory=dict)
+    pir: Mapping[int, int] = field(default_factory=dict)
+
+    @classmethod
+    def from_api(cls, data: Mapping[str, Any]) -> DeviceSettings:
+        """Parse `Data` of `/api/v1/device/detail`."""
+        config = data.get("JOY1SystemConfig")
+        if not isinstance(config, Mapping):
+            return cls()
+        return cls(
+            fill_light=_level_map(config.get("FillLight")),
+            pir=_level_map(config.get("Pir")),
+        )
+
+
+def _version_key(version: str) -> tuple[int, ...]:
+    """Compare firmware versions part by part. A part without digits counts as 0."""
+    parts = []
+    for part in version.split("."):
+        digits = "".join(char for char in part if char.isdigit())
+        parts.append(int(digits) if digits else 0)
+    return tuple(parts)
+
+
+@dataclass(frozen=True, slots=True)
+class FeatureRules:
+    """Minimum firmware versions per feature id, from `Data.Device.FeatureOpen`."""
+
+    minimums: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
+
+    @classmethod
+    def from_api(cls, data: Mapping[str, Any]) -> FeatureRules:
+        """Parse `Data` of `/api/v1/config/system/config`."""
+        device = data.get("Device")
+        items = device.get("FeatureOpen") if isinstance(device, Mapping) else None
+        rules: dict[str, list[str]] = {}
+        for item in items or ():
+            if not isinstance(item, Mapping):
+                continue
+            feature = str(item.get("FeatureId") or "")
+            version = str(item.get("MinimumVersion") or "")
+            if feature and version:
+                rules.setdefault(feature, []).append(version)
+        return cls({feature: tuple(versions) for feature, versions in rules.items()})
+
+    def enabled(self, feature: str, firmware: str | None) -> bool:
+        """Apply the app's rule: on without a firmware or a rule, else from the highest minimum."""
+        versions = self.minimums.get(feature)
+        if not firmware or not versions:
+            return True
+        return _version_key(firmware) >= max(_version_key(v) for v in versions)

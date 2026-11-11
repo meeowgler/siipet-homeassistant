@@ -100,7 +100,9 @@ async def test_reported_state_clears_pending(
     await _setup(hass, config_entry, shadow_links)
     await _switch(hass, NIGHT, False)
     assert hass.states.get(NIGHT).state == STATE_OFF
-    shadow_links[0].on_state("SN0001", replace(DEVICE_STATE, fill_light_low=True))
+    shadow_links[0].on_state(
+        "SN0001", replace(DEVICE_STATE, fill_light_night_vision=True)
+    )
     await hass.async_block_till_done()
     assert hass.states.get(NIGHT).state == STATE_ON
 

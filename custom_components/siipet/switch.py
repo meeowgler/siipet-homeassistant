@@ -33,7 +33,7 @@ SWITCHES: tuple[SiiPetSwitchDescription, ...] = (
     SiiPetSwitchDescription(
         key="night_vision",
         translation_key="night_vision",
-        value_fn=lambda state: state.fill_light_low,
+        value_fn=lambda state: state.fill_light_night_vision,
         payload_fn=lambda state, on: fill_light_payload(state, low=on),
     ),
 )

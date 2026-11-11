@@ -10,7 +10,9 @@ import pytest
 from custom_components.siipet.api import (
     Camera,
     CameraShadows,
+    DeviceSettings,
     DeviceState,
+    FeatureRules,
     IotCredentials,
 )
 from custom_components.siipet.api.models import (
@@ -93,7 +95,7 @@ def test_parse_config_shadow() -> None:
         "privacy": False,
         "fill_light": 2,
         "fill_light_auto": True,
-        "fill_light_low": True,
+        "fill_light_night_vision": True,
         "fill_light_brightness": 70,
         "motion_level": 3,
         "update_mode": 0,
@@ -165,7 +167,7 @@ def test_device_state_from_parts() -> None:
         privacy=False,
         fill_light=2,
         fill_light_auto=True,
-        fill_light_low=True,
+        fill_light_night_vision=True,
         fill_light_brightness=70,
         motion_level=3,
         update_mode=0,
@@ -183,3 +185,43 @@ def test_device_state_from_one_part() -> None:
     state = DeviceState.from_parts(None, system)
     assert state.battery is None
     assert state.online is True
+
+
+def test_device_settings_reads_level_maps() -> None:
+    """The maps go from level to value. Bad keys and values are skipped."""
+    settings = DeviceSettings.from_api(
+        {
+            "JOY1SystemConfig": {
+                "FillLight": {"1": 40, "2": 70, "3": 120, "x": 5, "4": "high"},
+                "Pir": {"2": 75, "3": 60},
+            }
+        }
+    )
+    assert settings.fill_light == {1: 40, 2: 70, 3: 120}
+    assert settings.pir == {2: 75, 3: 60}
+
+
+def test_device_settings_without_config() -> None:
+    """A detail without JOY1SystemConfig gives empty maps."""
+    assert DeviceSettings.from_api({}) == DeviceSettings()
+
+
+def test_feature_rules() -> None:
+    """A feature is on without a rule or a firmware, else from the highest minimum."""
+    rules = FeatureRules.from_api(
+        {
+            "Device": {
+                "FeatureOpen": [
+                    {"FeatureId": "6", "MinimumVersion": "0.0.7.2"},
+                    {"FeatureId": "6", "MinimumVersion": "0.0.7.10"},
+                    {"FeatureId": "1", "MinimumVersion": "9.0"},
+                ]
+            }
+        }
+    )
+    assert rules.enabled("6", "0.0.7.13")
+    assert rules.enabled("6", "0.0.7.10")
+    assert not rules.enabled("6", "0.0.7.9")
+    assert rules.enabled("6", None)
+    assert rules.enabled("5", "0.0.1")
+    assert FeatureRules.from_api({}).enabled("6", "0.0.1")

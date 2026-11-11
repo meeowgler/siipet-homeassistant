@@ -192,7 +192,7 @@ async def test_device_state_diagnostics(
                 "privacy": False,
                 "fill_light": 2,
                 "fill_light_auto": True,
-                "fill_light_low": True,
+                "fill_light_night_vision": True,
                 "fill_light_brightness": 70,
                 "motion_level": 3,
                 "update_mode": 0,

@@ -42,7 +42,7 @@ def fill_light_payload(
         "autoLight": auto if auto is not None else _default(state.fill_light_auto),
         "brightness2": brightness,
         "level": use_level,
-        "lowLight": low if low is not None else _default(state.fill_light_low),
+        "lowLight": low if low is not None else _default(state.fill_light_night_vision),
     }
 
 
