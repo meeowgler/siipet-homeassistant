@@ -14,6 +14,7 @@ from custom_components.siipet.api.mqtt import (
     DISCONNECT_PACKET,
     PINGREQ_PACKET,
     MqttError,
+    MqttNotSent,
     MqttRefused,
     MqttSession,
     Packet,
@@ -306,3 +307,54 @@ async def test_session_wait_closed_timeout(websession: aiohttp.ClientSession) ->
         await session.connect("id:1", 60, 1)
         assert not await session.wait_closed(0.05)
         await session.close()
+
+
+@pytest.mark.parametrize("closed_by", ["client", "broker"])
+async def test_session_publish_on_a_closed_session_is_not_sent(
+    websession: aiohttp.ClientSession, closed_by: str
+) -> None:
+    """A publish after the connection closed raises MqttNotSent."""
+    broker = FakeBroker()
+    async with run_broker(broker) as url:
+        session = await _session(websession, url)
+        await session.connect("id:1", 60, 1)
+        if closed_by == "client":
+            await session.close()
+        else:
+            await broker.close_all()
+            assert await session.wait_closed(1)
+        with pytest.raises(MqttNotSent):
+            await session.publish("$aws/things/SN0001/x")
+        await session.close()
+
+
+async def test_session_stalled_publish_is_not_marked_unsent() -> None:
+    """A publish that stalls after its write started is a plain MqttError."""
+    session = MqttSession(
+        StalledWriteSocket(),  # type: ignore[arg-type]
+        lambda _topic, _payload: None,
+        write_limit=0.05,
+    )
+    async with asyncio.timeout(1):
+        with pytest.raises(MqttError) as err:
+            await session.publish("t")
+    assert not isinstance(err.value, MqttNotSent)
+
+
+async def test_session_dropped(websession: aiohttp.ClientSession) -> None:
+    """A close by the broker marks the session dropped. A close by the client does not."""
+    broker = FakeBroker()
+    async with run_broker(broker) as url:
+        own = await _session(websession, url)
+        await own.connect("id:1", 60, 1)
+        assert not own.dropped
+        await own.close()
+        assert own.closed
+        assert not own.dropped
+        lost = await _session(websession, url)
+        await lost.connect("id:2", 60, 1)
+        await broker.close_all()
+        assert await lost.wait_closed(1)
+        assert lost.dropped
+        await lost.close()
+        assert lost.dropped

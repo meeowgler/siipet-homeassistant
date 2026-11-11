@@ -21,7 +21,7 @@ from custom_components.siipet.api import (
     ShadowWriteError,
     SiiPetAuthError,
 )
-from custom_components.siipet.api.mqtt import MqttSession
+from custom_components.siipet.api.mqtt import MqttError, MqttSession
 from custom_components.siipet.api.shadow_link import (
     LinkTimings,
     ShadowLink,
@@ -782,3 +782,63 @@ async def test_spent_limit_sends_nothing(limit: float) -> None:
         )
         assert result is WriteResult.ACCEPTED
         assert len(running.broker.updates) == 1
+
+
+@pytest.mark.parametrize("drop", [False, True])
+async def test_publish_error_after_the_write_is_unconfirmed(
+    monkeypatch: pytest.MonkeyPatch, drop: bool
+) -> None:
+    """A publish error after the message left is unconfirmed. A drop also pauses the writes."""
+    publish = MqttSession.publish
+
+    async def send_then_fail(
+        self: MqttSession, topic: str, payload: bytes = b""
+    ) -> None:
+        await publish(self, topic, payload)
+        if topic.endswith("/update"):
+            await self.wait_closed(0.2)
+            raise MqttError("The broker did not take the message in time")
+
+    broker = _broker(
+        close_on_update={"SN0001"} if drop else set(),
+        silent_update=set() if drop else {"SN0001"},
+    )
+    async with _running(broker) as running:
+        await _started(running)
+        monkeypatch.setattr(MqttSession, "publish", send_then_fail)
+        result = await running.link.update_desired(
+            "SN0001", "pir", {"level": 2}, limit=1
+        )
+        assert result is WriteResult.UNCONFIRMED
+        assert len(running.broker.updates) == 1
+        if drop:
+            await _until(lambda: running.recorder.connection == [True, False, True])
+            assert not running.link.can_write("SN0001")
+            assert running.link.can_write("SN0002")
+        else:
+            assert running.link.can_write("SN0001")
+            assert len(running.broker.connections) == 1
+
+
+async def test_write_during_a_planned_reconnect_pauses_nothing() -> None:
+    """A write in flight when the link reconnects on its own leaves the camera writable."""
+    soon = replace(
+        _credentials(),
+        expires=datetime.now(UTC) + timedelta(minutes=10, seconds=1),
+    )
+    fetch = AsyncMock(side_effect=[soon, _credentials()])
+    broker = _broker(silent_update={"SN0001"})
+    async with _running(broker, fetch=fetch) as running:
+        await _started(running)
+        loop = asyncio.get_running_loop()
+        start = loop.time()
+        result = await running.link.update_desired(
+            "SN0001", "pir", {"level": 2}, limit=3
+        )
+        assert result is WriteResult.UNCONFIRMED
+        # The reconnect ended the wait, not the limit.
+        assert loop.time() - start < 2.5
+        await _until(
+            lambda: len(broker.connections) == 2 and running.link.can_write("SN0001")
+        )
+        assert running.recorder.connection == [True]

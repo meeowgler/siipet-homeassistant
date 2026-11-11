@@ -41,6 +41,10 @@ class MqttRefused(MqttError):
     """The broker refused the connection with a non-zero CONNACK code."""
 
 
+class MqttNotSent(MqttError):
+    """The message was not sent because the connection is closed."""
+
+
 @dataclass(frozen=True, slots=True)
 class Packet:
     """One MQTT control packet: its type, the low bits of its first byte, its body."""
@@ -189,6 +193,7 @@ class MqttSession:
         self._reader = PacketReader()
         self._waiters: dict[tuple[int, int], asyncio.Future[Packet]] = {}
         self._closed = asyncio.Event()
+        self._closed_here = False
         self._task: asyncio.Task[None] | None = None
         self._packet_id = 0
 
@@ -196,6 +201,11 @@ class MqttSession:
     def closed(self) -> bool:
         """True after the connection closed."""
         return self._closed.is_set()
+
+    @property
+    def dropped(self) -> bool:
+        """True when the connection closed before any call to `close`."""
+        return self._closed.is_set() and not self._closed_here
 
     async def connect(self, client_id: str, keepalive: int, limit: float) -> None:
         """Send CONNECT and wait for an accepting CONNACK."""
@@ -220,7 +230,12 @@ class MqttSession:
         return [code != SUBACK_FAILURE for code in codes]
 
     async def publish(self, topic: str, payload: bytes = b"") -> None:
-        """Publish at QoS 0. Raise MqttError if the write takes too long."""
+        """Publish at QoS 0.
+
+        Raise MqttNotSent when the connection is already closed, and MqttError
+        when the write fails or takes too long. After a plain MqttError, the
+        message can still reach the broker.
+        """
         try:
             async with asyncio.timeout(self._write_limit):
                 await self._send(encode_publish(topic, payload))
@@ -246,6 +261,7 @@ class MqttSession:
         Each of the two steps gets up to the write limit.
         """
         if not self._closed.is_set():
+            self._closed_here = True
             with suppress(aiohttp.ClientError, ConnectionError, TimeoutError):
                 async with asyncio.timeout(self._write_limit):
                     await self._ws.send_bytes(DISCONNECT_PACKET)
@@ -281,7 +297,7 @@ class MqttSession:
 
     async def _send(self, data: bytes) -> None:
         if self._closed.is_set():
-            raise MqttError("The connection is closed")
+            raise MqttNotSent("The connection is closed")
         try:
             await self._ws.send_bytes(data)
         except (aiohttp.ClientError, ConnectionError) as err:

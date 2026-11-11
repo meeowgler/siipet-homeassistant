@@ -26,7 +26,7 @@ from .models import (
     ShadowPart,
     parse_shadow,
 )
-from .mqtt import MqttError, MqttRefused, MqttSession
+from .mqtt import MqttError, MqttNotSent, MqttRefused, MqttSession
 from .sigv4 import iot_ws_url
 
 _LOGGER = logging.getLogger(__name__)
@@ -404,6 +404,18 @@ class ShadowLink:
             "Writes to %s pause for %s", self._label(sn), self._timings.denied_retry
         )
 
+    def _pause_if_dropped(
+        self, session: MqttSession, sn: str, shadows: CameraShadows
+    ) -> None:
+        """Pause the writes of the camera when the connection dropped during a write.
+
+        AWS IoT can close the connection for a publish that the policy forbids,
+        so the reads go on without the writes. A close that the link started,
+        such as a planned reconnect or `stop()`, pauses nothing.
+        """
+        if session.dropped:
+            self._pause_writes(sn, shadows)
+
     def _writes_on_hold(self, sn: str) -> bool:
         """True while the writes of the camera are paused."""
         paused_at = self._writes_paused.get(sn)
@@ -449,9 +461,15 @@ class ShadowLink:
                     await session.publish(
                         shadow_topic(sn, shadows.config, "update"), body
                     )
-                except MqttError as err:
-                    # The message did not leave, so there is nothing to confirm.
+                except MqttNotSent as err:
+                    # The connection closed before the publish, so the message
+                    # did not leave.
                     raise ShadowWriteError("not_ready") from err
+                except MqttError:
+                    # The write failed or stalled after it started, so the
+                    # message can still reach AWS IoT.
+                    self._pause_if_dropped(session, sn, shadows)
+                    return WriteResult.UNCONFIRMED
                 closed = asyncio.ensure_future(session.wait_closed())
                 try:
                     done, _pending = await asyncio.wait(
@@ -466,10 +484,8 @@ class ShadowLink:
         finally:
             self._writes.pop(token, None)
         if future not in done:
-            # The connection closed before the answer. AWS IoT can close it for
-            # a publish that the policy forbids, so the writes of the camera
-            # pause and its reads go on.
-            self._pause_writes(sn, shadows)
+            # The connection closed before the answer.
+            self._pause_if_dropped(session, sn, shadows)
             return WriteResult.UNCONFIRMED
         if not future.result():
             raise ShadowWriteError("rejected")
