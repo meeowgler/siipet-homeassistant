@@ -227,15 +227,16 @@ class StalledWriteSocket:
 
 
 async def test_session_stalled_publish_times_out() -> None:
-    """A publish that the broker does not take ends at the write limit."""
+    """A publish that the broker does not take ends at the write limit with a plain MqttError."""
     session = MqttSession(
         StalledWriteSocket(),  # type: ignore[arg-type]
         lambda _topic, _payload: None,
         write_limit=0.05,
     )
     async with asyncio.timeout(1):
-        with pytest.raises(MqttError, match="did not take the message in time"):
+        with pytest.raises(MqttError, match="did not take the message in time") as err:
             await session.publish("t")
+    assert not isinstance(err.value, MqttNotSent)
 
 
 @pytest.mark.parametrize("stall_close", [False, True])
@@ -326,19 +327,6 @@ async def test_session_publish_on_a_closed_session_is_not_sent(
         with pytest.raises(MqttNotSent):
             await session.publish("$aws/things/SN0001/x")
         await session.close()
-
-
-async def test_session_stalled_publish_is_not_marked_unsent() -> None:
-    """A publish that stalls after its write started is a plain MqttError."""
-    session = MqttSession(
-        StalledWriteSocket(),  # type: ignore[arg-type]
-        lambda _topic, _payload: None,
-        write_limit=0.05,
-    )
-    async with asyncio.timeout(1):
-        with pytest.raises(MqttError) as err:
-            await session.publish("t")
-    assert not isinstance(err.value, MqttNotSent)
 
 
 async def test_session_dropped(websession: aiohttp.ClientSession) -> None:

@@ -7,6 +7,7 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime, timedelta
+import json
 import logging
 from typing import Any
 from unittest.mock import AsyncMock
@@ -842,3 +843,39 @@ async def test_write_during_a_planned_reconnect_pauses_nothing() -> None:
             lambda: len(broker.connections) == 2 and running.link.can_write("SN0001")
         )
         assert running.recorder.connection == [True]
+
+
+@pytest.mark.parametrize("failure", ["error", "stall"])
+@pytest.mark.parametrize("reply", ["accepted", "rejected"])
+async def test_reply_during_a_failed_publish_counts(
+    monkeypatch: pytest.MonkeyPatch, failure: str, reply: str
+) -> None:
+    """An answer that arrives before the publish fails or runs out of time decides the result."""
+    publish = MqttSession.publish
+    broker = _broker(silent_update={"SN0001"})
+
+    async def answer_then_fail(
+        self: MqttSession, topic: str, payload: bytes = b""
+    ) -> None:
+        await publish(self, topic, payload)
+        if not topic.endswith("/update"):
+            return
+        token = json.loads(payload)["clientToken"]
+        await broker.push(f"{topic}/{reply}", {"clientToken": token})
+        # The SUBACK comes after the reply, so the link has read the reply.
+        await self.subscribe(["$aws/things/SN0001/barrier"], 1)
+        if failure == "stall":
+            await asyncio.sleep(5)
+        raise MqttError("The broker did not take the message in time")
+
+    async with _running(broker) as running:
+        await _started(running)
+        monkeypatch.setattr(MqttSession, "publish", answer_then_fail)
+        write = running.link.update_desired("SN0001", "pir", {"level": 2}, limit=0.3)
+        if reply == "accepted":
+            assert await write is WriteResult.ACCEPTED
+        else:
+            with pytest.raises(ShadowWriteError) as err:
+                await write
+            assert err.value.reason == "rejected"
+        assert len(broker.updates) == 1

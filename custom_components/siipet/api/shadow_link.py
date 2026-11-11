@@ -46,8 +46,9 @@ class WriteResult(StrEnum):
     """The answer of AWS IoT to a desired write."""
 
     ACCEPTED = "accepted"
-    # No answer in time, or the connection dropped after the publish. The app
-    # does not wait for an answer either, so the change goes on.
+    # AWS IoT did not answer in time, the publish failed after it started, or
+    # the connection closed after the publish. The app does not wait for an
+    # answer either, so the change goes on.
     UNCONFIRMED = "unconfirmed"
 
 
@@ -453,7 +454,6 @@ class ShadowLink:
             separators=(",", ":"),
         ).encode()
         future: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
-        done: set[asyncio.Future[Any]] = set()
         self._writes[token] = future
         try:
             async with asyncio.timeout(limit):
@@ -468,28 +468,33 @@ class ShadowLink:
                 except MqttError:
                     # The write failed or stalled after it started, so the
                     # message can still reach AWS IoT.
-                    self._pause_if_dropped(session, sn, shadows)
-                    return WriteResult.UNCONFIRMED
-                closed = asyncio.ensure_future(session.wait_closed())
-                try:
-                    done, _pending = await asyncio.wait(
-                        {future, closed}, return_when=asyncio.FIRST_COMPLETED
-                    )
-                finally:
-                    closed.cancel()
-                    with suppress(asyncio.CancelledError):
-                        await closed
+                    pass
+                else:
+                    await self._wait_answer(session, future)
         except TimeoutError:
-            return WriteResult.UNCONFIRMED
+            pass
         finally:
             self._writes.pop(token, None)
-        if future not in done:
-            # The connection closed before the answer.
-            self._pause_if_dropped(session, sn, shadows)
-            return WriteResult.UNCONFIRMED
-        if not future.result():
-            raise ShadowWriteError("rejected")
-        return WriteResult.ACCEPTED
+        # An answer can arrive while the publish fails or the limit runs out,
+        # so it decides the result whenever it is there.
+        if future.done():
+            if not future.result():
+                raise ShadowWriteError("rejected")
+            return WriteResult.ACCEPTED
+        self._pause_if_dropped(session, sn, shadows)
+        return WriteResult.UNCONFIRMED
+
+    async def _wait_answer(
+        self, session: MqttSession, future: asyncio.Future[bool]
+    ) -> None:
+        """Wait until the answer arrives or the connection closes."""
+        closed = asyncio.ensure_future(session.wait_closed())
+        try:
+            await asyncio.wait({future, closed}, return_when=asyncio.FIRST_COMPLETED)
+        finally:
+            closed.cancel()
+            with suppress(asyncio.CancelledError):
+                await closed
 
     def _strike(self, sn: str) -> None:
         strikes = self._strikes.get(sn, 0) + 1
