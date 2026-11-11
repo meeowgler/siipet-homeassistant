@@ -67,6 +67,7 @@ async def test_turn_off_auto(
         "SN0001",
         "config.fillLight",
         {"autoLight": False, "brightness2": 70, "level": 2, "lowLight": True},
+        limit=15,
     )
     assert hass.states.get(AUTO).state == STATE_OFF
 
@@ -85,6 +86,7 @@ async def test_turn_off_night_vision(
         "SN0001",
         "config.fillLight",
         {"autoLight": True, "brightness2": 70, "level": 2, "lowLight": False},
+        limit=15,
     )
     assert hass.states.get(NIGHT).state == STATE_OFF
 

@@ -12,7 +12,7 @@ from homeassistant.helpers import config_validation as cv, device_registry as dr
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.typing import ConfigType
 
-from .api import LrtmControl, Session, SiiPetClient
+from .api import LrtmClient, Session, SiiPetClient
 from .api.s3 import S3Signer
 from .calendar_data import SiiPetCalendar
 from .card import async_register_card
@@ -91,7 +91,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: SiiPetConfigEntry) -> No
         email=entry.data.get(CONF_EMAIL),
         password_hash=entry.data.get(CONF_PASSWORD_HASH),
     )
-    control = LrtmControl(async_get_clientsession(hass), lambda: client.session)
+    control = LrtmClient(
+        async_get_clientsession(hass), client.get_session, client.recover_session
+    )
     coordinator = SiiPetCoordinator(hass, entry, client)
     await coordinator.async_config_entry_first_refresh()
     media = SiiPetMedia(

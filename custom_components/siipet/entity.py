@@ -165,7 +165,7 @@ class SiiPetCameraControlEntity(SiiPetCameraStateEntity):
         self._pending = optimistic
         self.async_write_ha_state()
         try:
-            await self._control.send(self.sn, command, payload)
+            await self._control.send(self.sn, command, payload, limit=15)
         except SiiPetError as err:
             self._pending = None
             self.async_write_ha_state()

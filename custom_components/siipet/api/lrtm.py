@@ -1,18 +1,17 @@
-"""The SiiPet realtime control lane (LRTM), on a Centrifugo WebSocket.
+"""The SiiPet realtime command lane (LRTM), on a Centrifugo WebSocket.
 
 The app changes a camera setting by publishing a command to the camera's
-request channel on a Centrifugo server. The protocol is the JSON protocol:
-each text frame is one or more newline-separated JSON objects. A command is
+request channel on a Centrifugo server. This module speaks the JSON protocol:
+each text frame holds one or more newline-separated JSON objects. A command is
 `{"id": n, "<method>": {...}}` and its reply is `{"id": n, "<method>": {...}}`
 or `{"id": n, "error": {...}}`. A lone `{}` from the server is a ping, answered
-with `{}`. This module speaks only the `connect` and `publish` methods, which
-is all a one-shot control needs, using only aiohttp and the standard library.
+with `{}`. Only `connect` and `publish` are used.
 """
 
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import suppress
 import json
 import logging
@@ -22,16 +21,20 @@ import uuid
 import aiohttp
 
 from .auth import Session
-from .errors import LrtmError
+from .errors import LrtmError, LrtmServerError, LrtmTransportError, SiiPetAuthError
 
 _LOGGER = logging.getLogger(__name__)
 
 LRTM_URL = "wss://wss-siipet.linkric.com/connection/websocket"
-# Per-camera channel the app publishes commands to.
 REQUEST_CHANNEL = "device:joy1:{sn}:app:dev:request"
-PROTOCOL = ("centrifuge-protocol-v2",)
-CONNECT_TIMEOUT = 15.0
-COMMAND_TIMEOUT = 15.0
+# The default name of centrifuge-java, the client library of the Android app.
+CLIENT_NAME = "java"
+# The platform that the Android app sends in its connect data.
+PLATFORM = 1
+# Centrifugo protocol errors for a token that is not valid or has expired.
+AUTH_ERROR_CODES = frozenset({101, 109})
+# Each frame and each reply of one command gets at most this long.
+STEP_LIMIT = 10.0
 
 
 def encode_command(command_id: int, method: str, params: dict[str, Any]) -> str:
@@ -54,7 +57,7 @@ class LrtmSession:
 
     A task reads frames until the socket closes. Replies are matched by id;
     a lone `{}` ping is answered; pushes go to `on_push`. Requests fail with
-    LrtmError when the connection closes.
+    LrtmTransportError when the connection closes.
     """
 
     def __init__(
@@ -82,7 +85,7 @@ class LrtmSession:
         """Send the connect command and return the connect reply."""
         self._task = asyncio.get_running_loop().create_task(self._read_loop())
         return await self._request(
-            "connect", {"name": "ha-siipet", "data": data}, limit
+            "connect", {"name": CLIENT_NAME, "data": data}, limit
         )
 
     async def publish(
@@ -117,7 +120,9 @@ class LrtmSession:
                 await self._send(encode_command(command_id, method, params))
                 return await future
         except TimeoutError as err:
-            raise LrtmError(f"The {method} command was not answered in time") from err
+            raise LrtmTransportError(
+                f"The {method} command was not answered in time"
+            ) from err
         finally:
             self._waiters.pop(command_id, None)
             if not future.done():
@@ -125,11 +130,11 @@ class LrtmSession:
 
     async def _send(self, frame: str) -> None:
         if self._closed.is_set():
-            raise LrtmError("The connection is closed")
+            raise LrtmTransportError("The realtime connection is closed")
         try:
             await self._ws.send_str(frame)
         except (aiohttp.ClientError, ConnectionError) as err:
-            raise LrtmError("Could not send to the realtime server") from err
+            raise LrtmTransportError("Could not send to the realtime server") from err
 
     async def _read_loop(self) -> None:
         try:
@@ -167,8 +172,15 @@ class LrtmSession:
             return
         error = frame.get("error")
         if isinstance(error, dict):
-            code, message = error.get("code"), error.get("message", "")
-            future.set_exception(LrtmError(f"Realtime error {code}: {message}"))
+            code = error.get("code")
+            if code in AUTH_ERROR_CODES:
+                future.set_exception(
+                    SiiPetAuthError("The realtime server rejected the session")
+                )
+            else:
+                future.set_exception(
+                    LrtmServerError(code if isinstance(code, int) else None)
+                )
         else:
             reply = next(
                 (v for k, v in frame.items() if k != "id" and isinstance(v, dict)), {}
@@ -191,53 +203,79 @@ class LrtmSession:
         self._closed.set()
         for future in self._waiters.values():
             if not future.done():
-                future.set_exception(LrtmError("The connection closed"))
+                future.set_exception(
+                    LrtmTransportError("The realtime connection closed")
+                )
 
 
-class LrtmControl:
-    """Send one control command to a camera over a short-lived realtime connection.
+class LrtmClient:
+    """Send one command to a camera over a short connection, as the app does.
 
-    It opens a connection, authenticates with the account's current session
-    (the same token the REST and shadow lanes use), publishes the command, and
-    closes. Opening per command keeps the lane idle between changes.
+    One connection per command keeps nothing open between the rare changes.
+    Commands to different cameras run at the same time.
     """
 
     def __init__(
         self,
         websession: aiohttp.ClientSession,
-        session: Callable[[], Session | None],
+        get_session: Callable[[], Awaitable[Session]],
+        recover_session: Callable[[Session], Awaitable[Session]],
         *,
         url: str = LRTM_URL,
     ) -> None:
-        """Create the control client. `session` returns the live session."""
+        """`get_session` gives the renewed session, `recover_session` a new one after an auth error."""
         self._websession = websession
-        self._session = session
+        self._get_session = get_session
+        self._recover_session = recover_session
         self._url = url
-        self._lock = asyncio.Lock()
 
-    async def send(self, sn: str, command: str, payload: dict[str, Any]) -> None:
-        """Send `command` with `payload` to the camera. Raise LrtmError on failure."""
-        session = self._session()
-        if session is None:
-            raise LrtmError("No session. Sign in first.")
-        auth = {"token": session.token, "userId": session.user_id}
-        connect_data = {"platform": 1, "appConnectData": auth}
-        # One command at a time keeps the per-command connection simple.
-        async with self._lock:
-            try:
-                async with asyncio.timeout(CONNECT_TIMEOUT):
-                    ws = await self._websession.ws_connect(
-                        self._url, protocols=PROTOCOL
-                    )
-            except (aiohttp.ClientError, ConnectionError, TimeoutError) as err:
-                raise LrtmError("Could not reach the realtime server") from err
-            lrtm = LrtmSession(ws)
-            try:
-                await lrtm.connect(connect_data, CONNECT_TIMEOUT)
-                await lrtm.publish(
-                    REQUEST_CHANNEL.format(sn=sn),
-                    device_command(sn, command, payload),
-                    COMMAND_TIMEOUT,
-                )
-            finally:
-                await lrtm.close()
+    async def send(
+        self, sn: str, command: str, payload: Mapping[str, Any], *, limit: float
+    ) -> None:
+        """Publish `command` to the camera.
+
+        Raise SiiPetAuthError when the session cannot be recovered,
+        LrtmServerError for an error answer, and LrtmTransportError when the
+        server cannot be reached or does not answer within `limit` seconds.
+        """
+        try:
+            async with asyncio.timeout(limit):
+                session = await self._get_session()
+                try:
+                    await self._publish(session, sn, command, payload)
+                except SiiPetAuthError:
+                    # The server answered the connect with an auth error, so
+                    # nothing was published and one more try is safe.
+                    session = await self._recover_session(session)
+                    await self._publish(session, sn, command, payload)
+        except TimeoutError as err:
+            raise LrtmTransportError(
+                "The realtime server did not answer in time"
+            ) from err
+
+    async def _publish(
+        self, session: Session, sn: str, command: str, payload: Mapping[str, Any]
+    ) -> None:
+        try:
+            ws = await self._websession.ws_connect(self._url)
+        except (aiohttp.ClientError, ConnectionError) as err:
+            raise LrtmTransportError("Could not reach the realtime server") from err
+        lrtm = LrtmSession(ws)
+        try:
+            await lrtm.connect(
+                {
+                    "platform": PLATFORM,
+                    "appConnectData": {
+                        "token": session.token,
+                        "userId": session.user_id,
+                    },
+                },
+                STEP_LIMIT,
+            )
+            await lrtm.publish(
+                REQUEST_CHANNEL.format(sn=sn),
+                device_command(sn, command, dict(payload)),
+                STEP_LIMIT,
+            )
+        finally:
+            await lrtm.close()

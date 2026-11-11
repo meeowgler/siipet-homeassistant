@@ -66,6 +66,7 @@ async def test_select_sends_command(
         "SN0001",
         "config.fillLight",
         {"autoLight": True, "brightness2": 120, "level": 3, "lowLight": True},
+        limit=15,
     )
     # The new level shows at once, before the camera reports it back.
     assert hass.states.get(SELECT).state == "high"

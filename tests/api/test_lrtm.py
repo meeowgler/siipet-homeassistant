@@ -3,22 +3,34 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 import json
 from typing import Any
+from unittest.mock import AsyncMock
 
 import aiohttp
 import pytest
 
-from custom_components.siipet.api import Session
+from custom_components.siipet.api import (
+    LrtmServerError,
+    LrtmTransportError,
+    Session,
+    SiiPetAuthError,
+)
 from custom_components.siipet.api.lrtm import (
-    LrtmControl,
-    LrtmError,
+    LrtmClient,
     LrtmSession,
     device_command,
     encode_command,
 )
 
 from ..common import make_token
+
+
+@pytest.fixture(autouse=True)
+def frozen_time() -> None:
+    """Keep the real clock. The timeouts wait on asyncio timers."""
+
 
 TOKEN = make_token("user-0001")
 SESSION = Session(TOKEN, 1_900_000_000_000)
@@ -101,6 +113,7 @@ async def test_connect_and_publish() -> None:
     assert reply == {"client": "c-1"}
     await session.publish("device:joy1:SN1:app:dev:request", {"x": 1}, 5)
     sent = [json.loads(frame) for frame in ws.sent]
+    assert sent[0]["connect"]["name"] == "java"
     assert sent[0]["connect"]["data"] == {"platform": 1}
     assert sent[1]["publish"]["channel"] == "device:joy1:SN1:app:dev:request"
     assert sent[1]["id"] != sent[0]["id"]
@@ -129,7 +142,7 @@ async def test_error_reply_raises() -> None:
 
     ws = FakeWS(responder=responder)
     session = LrtmSession(ws)
-    with pytest.raises(LrtmError, match="103"):
+    with pytest.raises(LrtmServerError):
         await session.connect({}, 5)
     await session.close()
 
@@ -142,7 +155,7 @@ async def test_closed_connection_fails_pending() -> None:
 
     ws = FakeWS(responder=responder)
     session = LrtmSession(ws)
-    with pytest.raises(LrtmError):
+    with pytest.raises(LrtmTransportError):
         await session.connect({}, 5)
 
 
@@ -159,49 +172,122 @@ async def test_push_goes_to_handler() -> None:
 
 
 class FakeClientSession:
-    """A websession whose ws_connect returns a prepared FakeWS."""
+    """A websession whose ws_connect returns the next prepared FakeWS."""
 
-    def __init__(self, ws: FakeWS | None, exc: Exception | None = None) -> None:
-        self._ws = ws
+    def __init__(self, sockets: list[FakeWS], exc: Exception | None = None) -> None:
+        self._sockets = sockets
         self._exc = exc
-        self.url: str | None = None
+        self.protocols: list[Any] = []
 
-    async def ws_connect(self, url: str, **_: Any) -> FakeWS:
-        self.url = url
+    async def ws_connect(self, url: str, **kwargs: Any) -> FakeWS:
+        self.protocols.append(kwargs.get("protocols"))
         if self._exc is not None:
             raise self._exc
-        assert self._ws is not None
-        return self._ws
+        return self._sockets.pop(0)
 
 
-async def test_control_send() -> None:
-    """A control command connects, publishes the device envelope, and closes."""
+def _client(
+    websession: FakeClientSession, recover: AsyncMock | None = None
+) -> LrtmClient:
+    return LrtmClient(
+        websession,
+        AsyncMock(return_value=SESSION),
+        recover or AsyncMock(side_effect=SiiPetAuthError("no password")),
+    )
+
+
+def _reject_connect(code: int) -> Any:
+    async def responder(ws: FakeWS, data: str) -> None:
+        frame = json.loads(data)
+        if "connect" in frame:
+            ws.feed(
+                json.dumps(
+                    {"id": frame["id"], "error": {"code": code, "message": "x SN1"}}
+                )
+            )
+
+    return responder
+
+
+async def test_client_sends_like_the_app() -> None:
+    """The command connects as the app, publishes the device envelope, and closes."""
     ws = FakeWS()
-    control = LrtmControl(FakeClientSession(ws), lambda: SESSION)
-    await control.send("SN1", "config.fillLight", {"level": 3})
-    frames = [json.loads(frame) for frame in ws.sent]
-    connect = next(f for f in frames if "connect" in f)
-    publish = next(f for f in frames if "publish" in f)
-    assert connect["connect"]["data"]["appConnectData"]["token"] == TOKEN
-    assert connect["connect"]["data"]["appConnectData"]["userId"] == "user-0001"
+    websession = FakeClientSession([ws])
+    await _client(websession).send("SN1", "config.fillLight", {"level": 3}, limit=5)
+    connect, publish = (json.loads(frame) for frame in ws.sent)
+    assert connect["connect"] == {
+        "name": "java",
+        "data": {
+            "platform": 1,
+            "appConnectData": {"token": TOKEN, "userId": "user-0001"},
+        },
+    }
     assert publish["publish"]["channel"] == "device:joy1:SN1:app:dev:request"
-    req = publish["publish"]["data"]["request"]
-    assert req["header"]["name"] == "config.fillLight"
-    assert req["payload"] == {"level": 3}
+    request = publish["publish"]["data"]["request"]
+    assert request["header"]["name"] == "config.fillLight"
+    assert request["payload"] == {"level": 3}
+    assert websession.protocols == [None]
     assert ws.closed
 
 
-async def test_control_without_session() -> None:
-    """With no session, send raises before it opens a socket."""
-    control = LrtmControl(FakeClientSession(None), lambda: None)
-    with pytest.raises(LrtmError, match="session"):
-        await control.send("SN1", "config.fillLight", {"level": 1})
-
-
-async def test_control_connect_failure() -> None:
-    """A socket that will not open raises LrtmError."""
-    control = LrtmControl(
-        FakeClientSession(None, aiohttp.ClientError()), lambda: SESSION
+async def test_auth_error_recovers_once() -> None:
+    """An expired token signs in again through the client, then sends once more."""
+    first = FakeWS(responder=_reject_connect(109))
+    second = FakeWS()
+    fresh = Session(make_token("user-0001"), 1_900_000_000_001)
+    recover = AsyncMock(return_value=fresh)
+    await _client(FakeClientSession([first, second]), recover).send(
+        "SN1", "config.privacyMode", {"active": True}, limit=5
     )
-    with pytest.raises(LrtmError, match="reach"):
-        await control.send("SN1", "config.fillLight", {"level": 1})
+    recover.assert_awaited_once_with(SESSION)
+    assert any("publish" in json.loads(frame) for frame in second.sent)
+
+
+async def test_auth_error_without_recovery() -> None:
+    """When the client cannot sign in again, the auth error goes to the caller."""
+    ws = FakeWS(responder=_reject_connect(101))
+    with pytest.raises(SiiPetAuthError):
+        await _client(FakeClientSession([ws])).send(
+            "SN1", "config.privacyMode", {"active": True}, limit=5
+        )
+
+
+async def test_server_error_keeps_only_the_code() -> None:
+    """Another error code is a server error without the server's message."""
+    ws = FakeWS(responder=_reject_connect(103))
+    with pytest.raises(LrtmServerError) as err:
+        await _client(FakeClientSession([ws])).send(
+            "SN1", "config.privacyMode", {"active": True}, limit=5
+        )
+    assert err.value.code == 103
+    assert "SN1" not in str(err.value)
+
+
+async def test_unreachable_server() -> None:
+    """A socket that will not open is a transport error."""
+    websession = FakeClientSession([], exc=aiohttp.ClientError())
+    with pytest.raises(LrtmTransportError, match="reach"):
+        await _client(websession).send("SN1", "config.fillLight", {}, limit=5)
+
+
+async def test_no_answer_in_time() -> None:
+    """A server that never answers is a transport error after the limit."""
+    ws = FakeWS(auto=False)
+    with pytest.raises(LrtmTransportError):
+        await _client(FakeClientSession([ws])).send(
+            "SN1", "config.fillLight", {}, limit=0.1
+        )
+    assert ws.closed
+
+
+async def test_cameras_do_not_wait_for_each_other() -> None:
+    """Two cameras send at the same time."""
+    slow = FakeWS(auto=False)
+    fast = FakeWS()
+    client = _client(FakeClientSession([slow, fast]))
+    first = asyncio.create_task(client.send("SN1", "config.fillLight", {}, limit=1))
+    await asyncio.sleep(0)
+    await client.send("SN2", "config.fillLight", {}, limit=1)
+    first.cancel()
+    with suppress(asyncio.CancelledError):
+        await first

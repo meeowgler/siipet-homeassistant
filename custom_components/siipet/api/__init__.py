@@ -13,7 +13,7 @@ from .errors import (
     SiiPetConnectionError,
     SiiPetError,
 )
-from .lrtm import LrtmControl
+from .lrtm import LrtmClient
 from .models import (
     AbnormalLabels,
     CalendarDay,
@@ -43,7 +43,7 @@ __all__ = [
     "DeviceState",
     "FeatureRules",
     "IotCredentials",
-    "LrtmControl",
+    "LrtmClient",
     "LrtmError",
     "LrtmServerError",
     "LrtmTransportError",

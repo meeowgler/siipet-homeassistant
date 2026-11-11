@@ -21,7 +21,7 @@ from .api import (
     Cat,
     DaySummary,
     DayVisits,
-    LrtmControl,
+    LrtmClient,
     SiiPetAuthError,
     SiiPetClient,
     SiiPetError,
@@ -56,7 +56,7 @@ class SiiPetRuntime:
     """Objects that live for as long as the config entry is loaded."""
 
     client: SiiPetClient
-    control: LrtmControl
+    control: LrtmClient
     coordinator: SiiPetCoordinator
     media: SiiPetMedia
     calendar: SiiPetCalendar
