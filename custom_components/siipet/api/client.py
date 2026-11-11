@@ -21,6 +21,8 @@ from .models import (
     Camera,
     Cat,
     DayVisits,
+    DeviceSettings,
+    FeatureRules,
     IotCredentials,
     MediaCredentials,
     Visit,
@@ -264,6 +266,35 @@ class SiiPetClient:
         data = await self._post(path, {})
         with _parsing(path):
             return IotCredentials.from_api(data)
+
+    async def get_device_settings(self, sn: str, version: str) -> DeviceSettings:
+        """Return the per-level values of a camera for its firmware version."""
+        path = "/api/v1/device/detail"
+        data = await self._post(path, {"SN": sn, "Version": version})
+        with _parsing(path):
+            return DeviceSettings.from_api(data or {})
+
+    async def get_feature_rules(self) -> FeatureRules:
+        """Return the minimum firmware version of each app feature."""
+        path = "/api/v1/config/system/config"
+        data = await self._post(path, {})
+        with _parsing(path):
+            return FeatureRules.from_api(data or {})
+
+    async def get_session(self) -> Session:
+        """Return the session for another service, renewed first when due."""
+        return await self._ensure_session()
+
+    async def recover_session(self, failed: Session) -> Session:
+        """Sign in again after another service rejected `failed`, and return the new session.
+
+        Raise SiiPetAuthError when there is no password, the last sign-in was
+        too recent, or SiiPet rejects the password.
+        """
+        if not await self._relogin(failed):
+            raise SiiPetAuthError("SiiPet ended the session")
+        assert self._session is not None
+        return self._session
 
     async def _post(self, path: str, body: dict[str, Any]) -> Any:
         """Send an authenticated request. Renew the session first when due.

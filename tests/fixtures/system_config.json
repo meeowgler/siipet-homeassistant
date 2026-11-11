@@ -2,6 +2,12 @@
   "Code": 0,
   "Msg": "success",
   "Data": {
+    "Device": {
+      "FeatureOpen": [
+        { "FeatureId": "6", "MinimumVersion": "1.0.0" },
+        { "FeatureId": "5", "MinimumVersion": "1.0.0" }
+      ]
+    },
     "Memory": {
       "AbnormalToilet": [
         {

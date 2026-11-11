@@ -903,3 +903,67 @@ async def test_late_renewal_keeps_session_of_relogin(
     assert updates == [NEW_SESSION]
     last_sync = calls(aioclient_mock, "user/pet/sync")[-1]
     assert last_sync[1]["authorization"] == f"Bearer {NEW_SESSION.token}"
+
+
+async def test_get_session_returns_the_current_session(
+    websession: aiohttp.ClientSession,
+) -> None:
+    """A fresh session needs no renewal."""
+    assert await make_client(websession).get_session() == FRESH
+
+
+async def test_recover_session_signs_in_again(
+    websession: aiohttp.ClientSession, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Another service rejected the session, so the client signs in with the password."""
+    updates: list[Session] = []
+    aioclient_mock.post(url("user/email/login"), json=NEW_LOGIN)
+    client = make_client(websession, updates=updates, password_hash=SECRET_HASH)
+    assert await client.recover_session(FRESH) == NEW_SESSION
+    assert client.session == NEW_SESSION
+    assert updates == [NEW_SESSION]
+
+
+async def test_recover_session_without_password(
+    websession: aiohttp.ClientSession, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """Without a password nothing signs in, and the error is an auth error."""
+    with pytest.raises(SiiPetAuthError):
+        await make_client(websession).recover_session(FRESH)
+    assert calls(aioclient_mock, "user/email/login") == []
+
+
+async def test_recover_session_keeps_the_cooldown(
+    websession: aiohttp.ClientSession, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """A second failed session within the cooldown does not sign in again."""
+    aioclient_mock.post(url("user/email/login"), json=NEW_LOGIN)
+    client = make_client(websession, password_hash=SECRET_HASH)
+    await client.recover_session(FRESH)
+    with pytest.raises(SiiPetAuthError):
+        await client.recover_session(NEW_SESSION)
+    assert len(calls(aioclient_mock, "user/email/login")) == 1
+
+
+async def test_get_device_settings(
+    websession: aiohttp.ClientSession, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """The detail call sends the serial and the firmware, and reads the level maps."""
+    aioclient_mock.post(url("device/detail"), json=load_fixture("device_detail.json"))
+    settings = await make_client(websession).get_device_settings("SN0001", "1.2.3")
+    [(body, _headers)] = calls(aioclient_mock, "device/detail")
+    assert body == {"SN": "SN0001", "Version": "1.2.3"}
+    assert settings.fill_light == {1: 40, 2: 70, 3: 120}
+    assert settings.pir == {2: 75, 3: 60}
+
+
+async def test_get_feature_rules(
+    websession: aiohttp.ClientSession, aioclient_mock: AiohttpClientMocker
+) -> None:
+    """The system config gives the minimum firmware of each feature."""
+    aioclient_mock.post(
+        url("config/system/config"), json=load_fixture("system_config.json")
+    )
+    rules = await make_client(websession).get_feature_rules()
+    assert rules.enabled("6", "1.2.3")
+    assert not rules.enabled("6", "0.9.9")

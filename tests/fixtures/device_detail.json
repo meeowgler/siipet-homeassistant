@@ -1,0 +1,11 @@
+{
+  "Code": 0,
+  "Msg": "success",
+  "Data": {
+    "SN": "SN0001",
+    "JOY1SystemConfig": {
+      "FillLight": { "1": 40, "2": 70, "3": 120 },
+      "Pir": { "2": 75, "3": 60 }
+    }
+  }
+}
