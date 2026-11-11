@@ -72,6 +72,75 @@ async def test_battery_attributes(
     assert attributes["state_class"] == "measurement"
 
 
+@pytest.mark.parametrize(
+    ("battery", "charging", "icon"),
+    [
+        (72, False, None),
+        (72, None, None),
+        (None, True, None),
+        (0, True, "mdi:battery-charging-outline"),
+        (9, True, "mdi:battery-charging-outline"),
+        (10, True, "mdi:battery-charging-10"),
+        (19, True, "mdi:battery-charging-10"),
+        (20, True, "mdi:battery-charging-20"),
+        (75, True, "mdi:battery-charging-70"),
+        (99, True, "mdi:battery-charging-90"),
+        (100, True, "mdi:battery-charging"),
+        (130, True, "mdi:battery-charging"),
+        (-5, True, "mdi:battery-charging-outline"),
+    ],
+)
+async def test_battery_charging_icon(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    shadow_links: list[FakeShadowLink],
+    battery: int | None,
+    charging: bool | None,
+    icon: str | None,
+) -> None:
+    """A charging camera gets a charging battery icon. Otherwise the sensor sets none."""
+    await _setup(
+        hass,
+        config_entry,
+        shadow_links,
+        replace(DEVICE_STATE, battery=battery, charging=charging),
+    )
+    assert hass.states.get("sensor.bathroom_battery").attributes.get("icon") == icon
+
+
+async def test_battery_icon_follows_charging(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    shadow_links: list[FakeShadowLink],
+) -> None:
+    """The charging icon comes and goes with the pushed charging state."""
+    await _setup(hass, config_entry, shadow_links)
+    shadow_links[0].on_state("SN0001", replace(DEVICE_STATE, charging=True))
+    await hass.async_block_till_done()
+    attributes = hass.states.get("sensor.bathroom_battery").attributes
+    assert attributes["icon"] == "mdi:battery-charging-70"
+    shadow_links[0].on_state("SN0001", DEVICE_STATE)
+    await hass.async_block_till_done()
+    assert "icon" not in hass.states.get("sensor.bathroom_battery").attributes
+
+
+async def test_unavailable_battery_has_no_icon(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    shadow_links: list[FakeShadowLink],
+) -> None:
+    """A battery sensor without a camera state sets no icon."""
+    await _setup(hass, config_entry, shadow_links, replace(DEVICE_STATE, charging=True))
+    shadow_links[0].on_state("SN0001", None)
+    await hass.async_block_till_done()
+    state = hass.states.get("sensor.bathroom_battery")
+    assert state.state == STATE_UNAVAILABLE
+    assert "icon" not in state.attributes
+
+
 async def test_enum_options(
     hass: HomeAssistant,
     mock_client: AsyncMock,

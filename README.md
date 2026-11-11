@@ -125,6 +125,7 @@ The integration keeps one connection to the SiiPet cloud open for the device sta
 The values update when a camera reports a change, and at least every 5 minutes.
 If the connection stays down for 15 minutes, the device state entities become unavailable.
 
+- While Charging is on, the Battery icon shows a charging battery at the current level.
 - Charging off does not prove that the cable is unplugged. The camera reports only whether it charges.
 - A camera can stop reporting while Online stays on. Last report shows how old the data is.
 - The device state works for an invited account too.

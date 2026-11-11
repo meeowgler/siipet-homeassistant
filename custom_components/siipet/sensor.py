@@ -185,10 +185,28 @@ class SiiPetCameraStateSensorDescription(SensorEntityDescription):
     """A sensor of the device state of a camera.
 
     With `codes`, the sensor is an enum, and `value_fn` returns the code.
+    With `icon_fn`, a returned icon replaces the default icon.
     """
 
     value_fn: Callable[[DeviceState], StateType | datetime]
     codes: Mapping[int, str] | None = None
+    icon_fn: Callable[[DeviceState], str | None] | None = None
+
+
+def _battery_icon(state: DeviceState) -> str | None:
+    """A charging battery icon, or None to keep the default level icon.
+
+    The steps floor the level like the range icons of a battery sensor,
+    so the shown level stays the same when charging starts.
+    """
+    if state.charging is not True or state.battery is None:
+        return None
+    level = min(max(state.battery, 0), 100)
+    if level < 10:
+        return "mdi:battery-charging-outline"
+    if level == 100:
+        return "mdi:battery-charging"
+    return f"mdi:battery-charging-{level // 10 * 10}"
 
 
 def _enum(
@@ -213,6 +231,7 @@ CAMERA_STATE_SENSORS: tuple[SiiPetCameraStateSensorDescription, ...] = (
         native_unit_of_measurement=PERCENTAGE,
         state_class=SensorStateClass.MEASUREMENT,
         value_fn=lambda state: state.battery,
+        icon_fn=_battery_icon,
     ),
     SiiPetCameraStateSensorDescription(
         key="last_report",
@@ -345,3 +364,11 @@ class SiiPetCameraStateSensor(SiiPetCameraStateEntity, SensorEntity):
             self._logged_codes.add(value)
             _LOGGER.debug("%s has the unknown code %s", self.entity_id, value)
         return option
+
+    @property
+    def icon(self) -> str | None:
+        """The icon from `icon_fn` while available, else the default icon."""
+        icon_fn = self.entity_description.icon_fn
+        if icon_fn is not None and self.available:
+            return icon_fn(self.state_data) or super().icon
+        return super().icon
