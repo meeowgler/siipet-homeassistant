@@ -212,9 +212,9 @@ def test_feature_rules() -> None:
         {
             "Device": {
                 "FeatureOpen": [
-                    {"FeatureId": "6", "MinimumVersion": "0.0.7.2"},
-                    {"FeatureId": "6", "MinimumVersion": "0.0.7.10"},
-                    {"FeatureId": "1", "MinimumVersion": "9.0"},
+                    {"FeatureId": ["6"], "MinimumVersion": "0.0.7.2"},
+                    {"FeatureId": ["6"], "MinimumVersion": "0.0.7.10"},
+                    {"FeatureId": ["1"], "MinimumVersion": "9.0"},
                 ]
             }
         }
@@ -225,3 +225,28 @@ def test_feature_rules() -> None:
     assert rules.enabled("6", None)
     assert rules.enabled("5", "0.0.1")
     assert FeatureRules.from_api({}).enabled("6", "0.0.1")
+
+
+def test_feature_rules_id_forms() -> None:
+    """An id is a list of strings or a plain string, and bad ids are skipped."""
+    rules = FeatureRules.from_api(
+        {
+            "Device": {
+                "FeatureOpen": [
+                    {"FeatureId": ["6"], "MinimumVersion": "0.0.6.31"},
+                    {"FeatureId": ["2", "3"], "MinimumVersion": "1.0"},
+                    {"FeatureId": "4", "MinimumVersion": "2.0"},
+                    {"FeatureId": [6], "MinimumVersion": "3.0"},
+                    {"FeatureId": [""], "MinimumVersion": "3.0"},
+                    {"FeatureId": [], "MinimumVersion": "3.0"},
+                    {"MinimumVersion": "3.0"},
+                ]
+            }
+        }
+    )
+    assert rules.minimums == {
+        "6": ("0.0.6.31",),
+        "2": ("1.0",),
+        "3": ("1.0",),
+        "4": ("2.0",),
+    }

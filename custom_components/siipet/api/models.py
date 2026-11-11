@@ -566,10 +566,14 @@ class FeatureRules:
         for item in items or ():
             if not isinstance(item, Mapping):
                 continue
-            feature = str(item.get("FeatureId") or "")
+            raw = item.get("FeatureId")
+            features = [raw] if isinstance(raw, str) else raw
             version = str(item.get("MinimumVersion") or "")
-            if feature and version:
-                rules.setdefault(feature, []).append(version)
+            if not version or not isinstance(features, list):
+                continue
+            for feature in features:
+                if isinstance(feature, str) and feature:
+                    rules.setdefault(feature, []).append(version)
         return cls({feature: tuple(versions) for feature, versions in rules.items()})
 
     def enabled(self, feature: str, firmware: str | None) -> bool:
