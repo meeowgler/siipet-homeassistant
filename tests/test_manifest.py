@@ -27,7 +27,7 @@ def test_manifest() -> None:
     assert manifest["requirements"] == []
     assert manifest["dependencies"] == ["http", "media_source", "websocket_api"]
     assert manifest["after_dependencies"] == ["frontend"]
-    assert manifest["version"] == "0.8.1"
+    assert manifest["version"] == "0.8.2"
 
 
 def test_manifest_categories() -> None:

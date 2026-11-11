@@ -135,13 +135,18 @@ export class SiiPetVisitEditor extends LitElement {
         font-size: var(--ha-font-size-m, 14px);
         font-weight: var(--ha-font-weight-medium, 500);
       }
+      /* The black background fills the whole screen. The safe area insets of
+         Home Assistant pad the photo, so the status bar, the notch, and the
+         home indicator do not cover it. */
       .stool-dialog {
+        box-sizing: border-box;
         width: 100vw;
         height: 100vh;
         max-width: 100vw;
         max-height: 100vh;
         margin: 0;
-        padding: 0;
+        padding: var(--safe-area-inset-top, 0px) var(--safe-area-inset-right, 0px)
+          var(--safe-area-inset-bottom, 0px) var(--safe-area-inset-left, 0px);
         border: none;
         background: black;
       }
@@ -165,10 +170,12 @@ export class SiiPetVisitEditor extends LitElement {
         height: 100%;
         object-fit: contain;
       }
+      /* A fixed element ignores the padding of the dialog, so the close
+         button takes the insets itself. */
       .stool-dialog-close {
         position: fixed;
-        top: 0;
-        right: 0;
+        top: var(--safe-area-inset-top, 0px);
+        right: var(--safe-area-inset-right, 0px);
         width: 48px;
         height: 48px;
         display: flex;

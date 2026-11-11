@@ -155,6 +155,35 @@ describe("edit view", () => {
     expect(computed.objectFit).toBe("contain");
   });
 
+  it("keeps the full screen stool photo and its close button inside the safe area", async () => {
+    const root = document.documentElement.style;
+    root.setProperty("--safe-area-inset-top", "47px");
+    root.setProperty("--safe-area-inset-right", "11px");
+    root.setProperty("--safe-area-inset-bottom", "34px");
+    root.setProperty("--safe-area-inset-left", "5px");
+    try {
+      const editor = await openVisit(await mount(fakeHass()));
+      inEditor(editor, ".stool-row")!.dispatchEvent(new Event("click"));
+      await settle();
+      const dialog = getComputedStyle(inEditor(editor, ".stool-dialog") as unknown as HTMLElement);
+      expect(dialog.boxSizing).toBe("border-box");
+      expect(dialog.paddingTop).toBe("47px");
+      expect(dialog.paddingRight).toBe("11px");
+      expect(dialog.paddingBottom).toBe("34px");
+      expect(dialog.paddingLeft).toBe("5px");
+      const close = getComputedStyle(
+        inEditor(editor, ".stool-dialog-close") as unknown as HTMLElement,
+      );
+      expect(close.top).toBe("47px");
+      expect(close.right).toBe("11px");
+    } finally {
+      root.removeProperty("--safe-area-inset-top");
+      root.removeProperty("--safe-area-inset-right");
+      root.removeProperty("--safe-area-inset-bottom");
+      root.removeProperty("--safe-area-inset-left");
+    }
+  });
+
   it("opens the stool photo full screen on Enter on its row", async () => {
     const editor = await openVisit(await mount(fakeHass()));
     inEditor(editor, ".stool-row")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
