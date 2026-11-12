@@ -104,14 +104,15 @@ class LrtmSession:
         data: dict[str, Any],
         limit: float,
         *,
-        on_sent: Callable[[], None] | None = None,
+        on_write: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         """Publish to a channel and return the publish reply.
 
-        `on_sent` runs once the socket took the publish frame.
+        `on_write` runs right before the socket writes the publish frame. On a
+        closed connection nothing is written and `on_write` does not run.
         """
         return await self._request(
-            "publish", {"channel": channel, "data": data}, limit, on_sent
+            "publish", {"channel": channel, "data": data}, limit, on_write
         )
 
     async def close(self) -> None:
@@ -134,7 +135,7 @@ class LrtmSession:
         method: str,
         params: dict[str, Any],
         limit: float,
-        on_sent: Callable[[], None] | None = None,
+        on_write: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         self._command_id += 1
         command_id = self._command_id
@@ -144,9 +145,7 @@ class LrtmSession:
         self._waiters[command_id] = future
         try:
             async with asyncio.timeout(limit):
-                await self._send(encode_command(command_id, method, params))
-                if on_sent is not None:
-                    on_sent()
+                await self._send(encode_command(command_id, method, params), on_write)
                 return await future
         except TimeoutError as err:
             raise LrtmTransportError(
@@ -157,9 +156,15 @@ class LrtmSession:
             if not future.done():
                 future.cancel()
 
-    async def _send(self, frame: str) -> None:
+    async def _send(
+        self, frame: str, on_write: Callable[[], None] | None = None
+    ) -> None:
         if self._closed.is_set():
             raise LrtmTransportError("The realtime connection is closed")
+        if on_write is not None:
+            # A write that fails or stalls can still have put the frame on
+            # the wire.
+            on_write()
         try:
             await self._ws.send_str(frame)
         except (aiohttp.ClientError, ConnectionError) as err:
@@ -274,8 +279,9 @@ class LrtmClient:
         Raise SiiPetAuthError when the session cannot be recovered,
         LrtmServerError for an error answer, and LrtmTransportError when the
         server cannot be reached or does not answer within `limit` seconds.
-        When the failure comes after the socket took the publish frame, raise
-        LrtmUnconfirmedError, because the camera may still apply the command.
+        When the failure comes after the write of the publish frame started,
+        raise LrtmUnconfirmedError, because the camera may still apply the
+        command.
         When `still_wanted` returns False right before a publish, publish
         nothing and raise LrtmTransportError.
         """
@@ -284,7 +290,7 @@ class LrtmClient:
         opened: list[LrtmSession] = []
         published = False
 
-        def on_sent() -> None:
+        def on_write() -> None:
             nonlocal published
             published = True
 
@@ -298,7 +304,7 @@ class LrtmClient:
                 REQUEST_CHANNEL.format(sn=sn),
                 device_command(sn, command, dict(payload)),
                 STEP_LIMIT,
-                on_sent=on_sent,
+                on_write=on_write,
             )
 
         try:

@@ -430,17 +430,40 @@ async def test_publish_without_answer_is_unconfirmed(publish: Any) -> None:
 
 
 async def test_publish_not_written_is_not_sent() -> None:
-    """A publish frame that the socket did not take did not reach the camera."""
+    """A connection that closed before the publish frame sent nothing."""
 
-    async def fail(ws: FakeWS) -> None:
-        raise ConnectionError("reset")
+    async def close_after_connect(ws: FakeWS, data: str) -> None:
+        frame = json.loads(data)
+        if "connect" in frame:
+            ws.feed(json.dumps({"id": frame["id"], "connect": {"client": "c-1"}}))
+            ws.error()
 
-    ws = FakeWS(responder=_answer(fail))
+    ws = FakeWS(responder=close_after_connect)
     with pytest.raises(LrtmTransportError) as err:
         await _client(FakeClientSession([ws])).send(
             "SN1", "config.fillLight", {}, limit=5
         )
     assert not isinstance(err.value, LrtmUnconfirmedError)
+    assert _publishes(ws) == []
+
+
+async def _fail(ws: FakeWS) -> None:
+    raise ConnectionError("reset")
+
+
+async def _stall(ws: FakeWS) -> None:
+    await asyncio.sleep(10)
+
+
+@pytest.mark.parametrize("publish", [_fail, _stall])
+async def test_failed_publish_write_is_unconfirmed(publish: Any) -> None:
+    """A publish frame whose write failed or stalled can still reach the camera."""
+    ws = FakeWS(responder=_answer(publish))
+    client = _client(FakeClientSession([ws]))
+    with pytest.raises(LrtmUnconfirmedError):
+        await client.send("SN1", "config.fillLight", {}, limit=0.2)
+    assert len(_publishes(ws)) == 1
+    await _closes_done(client)
 
 
 async def test_refused_publish_then_unreachable_is_not_sent() -> None:
