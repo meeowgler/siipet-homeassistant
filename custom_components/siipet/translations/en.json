@@ -125,6 +125,9 @@
     "change_not_sent": {
       "message": "SiiPet did not accept the change for {camera}: {error}"
     },
+    "change_timed_out": {
+      "message": "The change for {camera} ran out of time before it was sent. Try again."
+    },
     "change_partial": {
       "message": "SiiPet saved the change for {camera}, but could not send it to the camera: {error}. The camera may apply it later."
     },

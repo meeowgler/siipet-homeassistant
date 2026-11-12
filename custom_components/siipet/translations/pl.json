@@ -125,6 +125,9 @@
     "change_not_sent": {
       "message": "SiiPet nie przyjął zmiany dla kamery {camera}: {error}"
     },
+    "change_timed_out": {
+      "message": "Zmiana dla kamery {camera} nie została wysłana na czas. Spróbuj ponownie."
+    },
     "change_partial": {
       "message": "SiiPet zapisał zmianę dla kamery {camera}, ale nie mógł wysłać jej do kamery: {error}. Kamera może zastosować ją później."
     },

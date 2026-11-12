@@ -163,9 +163,7 @@ class SiiPetDeviceCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
             async with asyncio.timeout(remaining()):
                 await lock.acquire()
         except TimeoutError as err:
-            raise self._error(
-                "change_not_sent", sn, error="an earlier change is still waiting"
-            ) from err
+            raise self._error("change_timed_out", sn) from err
         try:
             await self._async_apply_locked(sn, change, group, remaining)
         finally:
@@ -183,14 +181,14 @@ class SiiPetDeviceCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
         settings = DeviceSettings()
         if group is not SettingGroup.PRIVACY:
             if remaining() <= 0:
-                raise self._error("change_not_sent", sn, error="timeout")
+                raise self._error("change_timed_out", sn)
             try:
                 async with asyncio.timeout(remaining()):
                     if not await self._async_feature_enabled(state):
                         raise self._error("setting_not_supported", sn)
                     settings = await self._async_device_settings(sn, state)
             except TimeoutError as err:
-                raise self._error("change_not_sent", sn, error="timeout") from err
+                raise self._error("change_timed_out", sn) from err
             except SiiPetError as err:
                 raise self._request_failed(sn, err) from err
             # The camera can leave, or the entry unload, during the reads.
@@ -238,7 +236,7 @@ class SiiPetDeviceCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
         if planned.desired_key is not None and self._may_write_shadow(sn):
             left = remaining()
             if left <= 0:
-                raise self._error("change_not_sent", sn, error="timeout")
+                raise self._error("change_timed_out", sn)
             try:
                 result = await self._link.update_desired(
                     sn,
@@ -261,8 +259,9 @@ class SiiPetDeviceCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
             raise self._stopped_error(sn, desired_written)
         left = remaining()
         if left <= 0:
-            key = "change_partial" if desired_written else "change_not_sent"
-            raise self._error(key, sn, error="timeout")
+            if desired_written:
+                raise self._error("change_partial", sn, error="timeout")
+            raise self._error("change_timed_out", sn)
         try:
             await self._lrtm.send(
                 sn,

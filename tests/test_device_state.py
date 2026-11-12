@@ -621,7 +621,7 @@ async def test_deadline_used_up_in_line(
     assert err.value.translation_key == "change_not_confirmed"
     with pytest.raises(HomeAssistantError) as err:
         await second
-    assert err.value.translation_key == "change_not_sent"
+    assert err.value.translation_key == "change_timed_out"
     assert link.update_desired.await_count == 1
     assert mock_control.send.await_count == 1
     assert hub._waiters == {}
@@ -630,7 +630,7 @@ async def test_deadline_used_up_in_line(
 @pytest.mark.parametrize(
     ("slow", "key", "writes"),
     [
-        ("get_device_settings", "change_not_sent", 0),
+        ("get_device_settings", "change_timed_out", 0),
         ("update_desired", "change_partial", 1),
     ],
 )
@@ -658,7 +658,8 @@ async def test_no_step_starts_without_time(
     with pytest.raises(HomeAssistantError) as err:
         await hub.async_apply("SN0001", MotionChange(level=2))
     assert err.value.translation_key == key
-    assert err.value.translation_placeholders["error"] == "timeout"
+    if key == "change_partial":
+        assert err.value.translation_placeholders["error"] == "timeout"
     assert link.update_desired.await_count == writes
     mock_control.send.assert_not_awaited()
 
@@ -1064,11 +1065,70 @@ async def test_no_read_without_time(
     await first
     with pytest.raises(HomeAssistantError) as err:
         await second
-    assert err.value.translation_key == "change_not_sent"
-    assert err.value.translation_placeholders["error"] == "timeout"
+    assert err.value.translation_key == "change_timed_out"
     assert mock_client.get_device_settings.await_count == 1
     assert link.update_desired.await_count == 1
     assert mock_control.send.await_count == 1
+
+
+async def test_slow_detail_read_runs_out_of_time(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_control: AsyncMock,
+    config_entry: MockConfigEntry,
+    shadow_links: list[FakeShadowLink],
+    frozen_time: FrozenDateTimeFactory,
+) -> None:
+    """A detail read that outlasts the deadline sends nothing."""
+    hub, link = await _hub(hass, config_entry, shadow_links)
+    release = asyncio.Event()
+
+    async def slow_read(*_args: Any, **_kwargs: Any) -> None:
+        await release.wait()
+
+    mock_client.get_device_settings.side_effect = slow_read
+    task = asyncio.ensure_future(hub.async_apply("SN0001", MotionChange(level=2)))
+    await _until_awaited(mock_client.get_device_settings)
+    await _expire(hass, frozen_time)
+    with pytest.raises(HomeAssistantError) as err:
+        await task
+    assert err.value.translation_key == "change_timed_out"
+    link.update_desired.assert_not_awaited()
+    mock_control.send.assert_not_awaited()
+    assert hub._waiters == {}
+
+
+async def test_no_command_without_time(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_control: AsyncMock,
+    config_entry: MockConfigEntry,
+    shadow_links: list[FakeShadowLink],
+    frozen_time: FrozenDateTimeFactory,
+) -> None:
+    """A privacy change whose turn comes with no time left sends nothing."""
+    hub, link = await _hub(hass, config_entry, shadow_links)
+    release = asyncio.Event()
+
+    async def slow_command(*_args: Any, **_kwargs: Any) -> None:
+        await release.wait()
+        frozen_time.tick(CHANGE_TIMEOUT)
+        link.on_state("SN0001", replace(DEVICE_STATE, privacy=True))
+
+    mock_control.send.side_effect = slow_command
+    first = asyncio.ensure_future(hub.async_apply("SN0001", PrivacyChange(active=True)))
+    await _until_sent(mock_control)
+    second = asyncio.ensure_future(
+        hub.async_apply("SN0001", PrivacyChange(active=False))
+    )
+    await asyncio.sleep(0)
+    release.set()
+    await first
+    with pytest.raises(HomeAssistantError) as err:
+        await second
+    assert err.value.translation_key == "change_timed_out"
+    assert mock_control.send.await_count == 1
+    assert hub._waiters == {}
 
 
 async def test_unconfirmed_write_still_sends_the_command(
