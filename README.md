@@ -134,7 +134,7 @@ Each camera has these controls:
 - **Auto fill light**: the camera turns its light on by itself in the dark.
 - **Night vision fill light**: the light used for night vision.
 - **Motion sensitivity**: standard or high.
-- **Privacy mode**: while it is on, the camera does not record visits.
+- **Privacy mode**: while it is on, the camera stops capturing events. The app calls this mode Sleep.
 
 A change waits until the camera reports the new value. This takes a few seconds.
 If the camera does not confirm the change in 15 seconds, Home Assistant shows an error,

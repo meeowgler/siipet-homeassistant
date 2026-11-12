@@ -16,7 +16,7 @@ custom_components/siipet/
     client.py          SiiPetClient: headers, envelope, one method per endpoint
     auth.py            challenge encryption, token payload, renewal rule
     challenge_key.py   AES key for the sign-in challenge
-    models.py          Cat, Camera, CameraShadows, Visit, VisitType, DayVisits, DaySummary, CalendarDay, AbnormalLabels, MediaCredentials, IotCredentials, DeviceState
+    models.py          Cat, Camera, CameraShadows, Visit, VisitType, DayVisits, DaySummary, CalendarDay, AbnormalLabels, MediaCredentials, IotCredentials, DeviceState, DeviceSettings, FeatureRules
     edits.py           plan_edit: the annotate and memo calls for one visit edit
     errors.py          SiiPetError and its subclasses
     s3.py              SigV4 presigned GET URLs, credential cache
@@ -147,6 +147,7 @@ This repo is public. Keep these values out of commits, tests, logs, and entity a
 - Camera serial numbers, `UserId`, `GroupId`, `PetId`, and messaging topics.
 - S3 credentials, the bucket name, media keys, and signed URLs.
 - Shadow names, MQTT topics, the AWS IoT endpoint, `IdentityId`, and the MQTT client identifier.
+- Realtime channels, and the client tokens of shadow writes.
 - The Wi-Fi name and the IP and MAC addresses of a camera. The shadow parser does not read them.
 - Raw API captures. Build test fixtures from the documented shapes with fake values.
 
@@ -203,6 +204,8 @@ CI fails when the committed file differs from a new build.
 - Tests run in UTC with the time frozen at 2026-09-26 12:00.
 - The entry fixtures turn the local media copy off. Tests of the copy use `setup_mirror` in `tests/common.py`.
 - Integration tests replace `ShadowLink` with `FakeShadowLink` from `tests/common.py`. A test calls its callbacks to push a state or a connection change.
+- Integration tests replace the realtime client with the `mock_control` fixture.
+  `camera_reports` in `tests/common.py` acts as a camera that answers a command with a report of the new value.
 - The MQTT and shadow link tests run a fake broker on localhost. They use `socket_enabled` and replace the frozen clock, because a frozen clock stops asyncio timers.
 - Card tests run with an English profile, 24-hour times, and Monday first. A test that needs another locale uses `withLocale` from `frontend/test/helpers.ts`.
 

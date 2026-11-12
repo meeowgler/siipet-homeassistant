@@ -630,7 +630,7 @@ object, so a change to one field keeps the others:
 {"autoLight": true, "brightness2": 70, "level": 2, "lowLight": true}
 ```
 
-`level` is 1, 2, or 3 (low, medium, high). `brightness2` comes from
+`level` is 1, 2, or 3 (low, standard, high). `brightness2` comes from
 `Data.JOY1SystemConfig.FillLight["<level>"]` of `/api/v1/device/detail`, and the
 app uses 60 when the level has no entry. The app's slider values 40, 70, and 120
 are display values only.
@@ -1187,7 +1187,7 @@ These results come from tests against a real account.
 - The realtime control lane works from an invited account. A `config.fillLight`
   command on the `device:joy1:<SN>:app:dev:request` channel, with the connect
   `data` carrying the API token and user id, changed the camera's reported
-  `fillLight.level` (tested low, medium, high) and its `lowLight` field. The
+  `fillLight.level` (tested low, standard, high) and its `lowLight` field. The
   camera applied the command and reported the new value over its shadow.
 - Sent without the shadow `desired` write, the camera still applied the command
   and reported the change. The shadow then showed a `delta` for the stale
@@ -1202,7 +1202,8 @@ These results come from tests against a real account.
 - An invalid token and an ended session token both get the connect error code 401.
   The server sends an error reply and drops the socket about 5 seconds later.
 - The REST API answers an expired token with `Code` -2, so an expired token cannot
-  be renewed and the user has to sign in again.
+  be renewed. The integration signs in again with the stored password, if it has one,
+  or asks the user to sign in again.
 - A full fill light change on cameras on battery took a `desired` write of about
   150 ms and a command of 0.8 to 1.2 seconds. The camera reported the new values
   1.2 to 2.9 seconds after the command started, also while it was idle. A shadow
