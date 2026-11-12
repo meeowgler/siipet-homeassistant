@@ -257,16 +257,21 @@ class SiiPetDeviceCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
                 )
         # The entry can unload, or the camera leave, during the desired write.
         # Nothing then waits for the report, so the command stays unsent.
-        if self._stopped or sn not in self._shadows or waiter.abandoned():
-            if desired_written:
-                raise self._error("change_partial", sn, error="the change was stopped")
-            raise self._error("connection_not_ready", sn)
+        if self._abandoned(sn, waiter):
+            raise self._stopped_error(sn, desired_written)
         left = remaining()
         if left <= 0:
             key = "change_partial" if desired_written else "change_not_sent"
             raise self._error(key, sn, error="timeout")
         try:
-            await self._lrtm.send(sn, planned.command, planned.payload, limit=left)
+            await self._lrtm.send(
+                sn,
+                planned.command,
+                planned.payload,
+                limit=left,
+                # The same stop can come while the command connects.
+                still_wanted=lambda: not self._abandoned(sn, waiter),
+            )
         except LrtmUnconfirmedError:
             # The command went out, so the camera may still apply it. Its
             # report decides.
@@ -274,13 +279,24 @@ class SiiPetDeviceCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
                 "The realtime server did not confirm the command for %s",
                 self._label(sn),
             )
-        except SiiPetAuthError as err:
-            self.config_entry.async_start_reauth(self.hass)
-            key = "change_partial" if desired_written else "request_failed"
-            raise self._error(key, sn, error=str(err)) from err
         except SiiPetError as err:
-            key = "change_partial" if desired_written else "change_not_sent"
+            if self._abandoned(sn, waiter):
+                raise self._stopped_error(sn, desired_written) from err
+            if isinstance(err, SiiPetAuthError):
+                self.config_entry.async_start_reauth(self.hass)
+                key = "change_partial" if desired_written else "request_failed"
+            else:
+                key = "change_partial" if desired_written else "change_not_sent"
             raise self._error(key, sn, error=str(err)) from err
+
+    def _abandoned(self, sn: str, waiter: _Waiter) -> bool:
+        """True when the entry unloaded or the camera left after the change started."""
+        return self._stopped or sn not in self._shadows or waiter.abandoned()
+
+    def _stopped_error(self, sn: str, desired_written: bool) -> HomeAssistantError:
+        if desired_written:
+            return self._error("change_partial", sn, error="the change was stopped")
+        return self._error("connection_not_ready", sn)
 
     def _may_write_shadow(self, sn: str) -> bool:
         if self._link.can_write(sn):

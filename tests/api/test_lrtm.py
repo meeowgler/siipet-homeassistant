@@ -282,36 +282,119 @@ async def test_unreachable_server() -> None:
         await _client(websession).send("SN1", "config.fillLight", {}, limit=5)
 
 
+async def _closes_done(client: LrtmClient) -> None:
+    """Wait for the closes that went on after `send` returned."""
+    await asyncio.gather(*list(client._closing))
+    await asyncio.sleep(0)
+    assert not client._closing
+
+
 async def test_no_answer_in_time() -> None:
     """A server that never answers is a transport error after the limit."""
     ws = FakeWS(auto=False)
+    client = _client(FakeClientSession([ws]))
     with pytest.raises(LrtmTransportError) as err:
-        await _client(FakeClientSession([ws])).send(
-            "SN1", "config.fillLight", {}, limit=0.1
-        )
+        await client.send("SN1", "config.fillLight", {}, limit=0.1)
     # The connect was not answered, so nothing was published.
     assert not isinstance(err.value, LrtmUnconfirmedError)
+    await _closes_done(client)
     assert ws.closed
 
 
 class StuckCloseWS(FakeWS):
-    """A FakeWS whose close never returns."""
+    """A FakeWS whose close waits until the test sets `release`."""
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self.release = asyncio.Event()
 
     async def close(self) -> None:
         self.closed = True
-        await asyncio.Event().wait()
+        await self.release.wait()
+        self._queue.put_nowait(None)
 
 
-async def test_stalled_close_stays_near_the_limit() -> None:
-    """A socket that does not close costs about a second after the limit."""
-    ws = StuckCloseWS(auto=False)
+async def test_stalled_close_goes_on_after_the_limit() -> None:
+    """A socket that does not close keeps no command past its limit."""
+    ws = StuckCloseWS()
+    client = _client(FakeClientSession([ws]))
     loop = asyncio.get_running_loop()
     start = loop.time()
-    with pytest.raises(LrtmTransportError):
-        await _client(FakeClientSession([ws])).send(
-            "SN1", "config.fillLight", {}, limit=0.1
+    await client.send("SN1", "config.fillLight", {}, limit=0.1)
+    assert loop.time() - start < 0.25
+    assert len(client._closing) == 1
+    ws.release.set()
+    await _closes_done(client)
+
+
+async def test_refused_publish_with_a_slow_close() -> None:
+    """A refusal that came before the limit stays a refusal."""
+
+    async def refuse(ws: FakeWS) -> None:
+        frame = json.loads(ws.sent[-1])
+        ws.feed(json.dumps({"id": frame["id"], "error": {"code": 103}}))
+
+    ws = StuckCloseWS(responder=_answer(refuse))
+    client = _client(FakeClientSession([ws]))
+    with pytest.raises(LrtmServerError) as err:
+        await client.send("SN1", "config.fillLight", {}, limit=0.1)
+    assert err.value.code == 103
+    ws.release.set()
+    await _closes_done(client)
+
+
+async def test_canceled_close_stops_the_reader() -> None:
+    """A close canceled while the socket closes still stops the reader."""
+    ws = StuckCloseWS()
+    session = LrtmSession(ws)
+    await session.connect({}, 5)
+    closing = asyncio.ensure_future(session.close())
+    await asyncio.sleep(0)
+    closing.cancel()
+    with suppress(asyncio.CancelledError):
+        await closing
+    assert session._task is not None
+    assert session._task.done()
+
+
+def _publishes(ws: FakeWS) -> list[dict[str, Any]]:
+    return [frame for frame in map(json.loads, ws.sent) if "publish" in frame]
+
+
+async def test_unwanted_command_is_not_published() -> None:
+    """A command that is no longer wanted when the connection is ready is not published."""
+    ws = FakeWS()
+    client = _client(FakeClientSession([ws]))
+    with pytest.raises(LrtmTransportError) as err:
+        await client.send(
+            "SN1", "config.fillLight", {}, limit=5, still_wanted=lambda: False
         )
-    assert loop.time() - start < 1.5
+    assert not isinstance(err.value, LrtmUnconfirmedError)
+    assert _publishes(ws) == []
+    assert ws.closed
+
+
+async def test_unwanted_command_is_not_published_after_a_new_sign_in() -> None:
+    """The check runs again before the publish that follows a new sign-in."""
+    first = FakeWS(responder=_reject_connect(401))
+    second = FakeWS()
+    wanted = True
+    fresh = Session(make_token("user-0001"), 1_900_000_000_001)
+
+    async def recover(_failed: Session) -> Session:
+        nonlocal wanted
+        wanted = False
+        return fresh
+
+    client = _client(FakeClientSession([first, second]), AsyncMock(side_effect=recover))
+    with pytest.raises(LrtmTransportError) as err:
+        await client.send(
+            "SN1", "config.fillLight", {}, limit=5, still_wanted=lambda: wanted
+        )
+    assert not isinstance(err.value, LrtmUnconfirmedError)
+    assert _publishes(first) == []
+    assert _publishes(second) == []
+    assert second.closed
 
 
 def _answer(publish: Any) -> Any:
@@ -339,10 +422,10 @@ async def _close(ws: FakeWS) -> None:
 async def test_publish_without_answer_is_unconfirmed(publish: Any) -> None:
     """A publish that went out without an answer can still reach the camera."""
     ws = FakeWS(responder=_answer(publish))
+    client = _client(FakeClientSession([ws]))
     with pytest.raises(LrtmUnconfirmedError):
-        await _client(FakeClientSession([ws])).send(
-            "SN1", "config.fillLight", {}, limit=0.2
-        )
+        await client.send("SN1", "config.fillLight", {}, limit=0.2)
+    await _closes_done(client)
     assert ws.closed
 
 

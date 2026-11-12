@@ -41,8 +41,9 @@ PLATFORM = 1
 AUTH_ERROR_CODES = frozenset({401})
 # Each frame and each reply of one command gets at most this long.
 STEP_LIMIT = 10.0
-# Closing the socket after a command gets at most this long, so a stalled
-# close adds little to the limit of `LrtmClient.send`.
+# Closing the socket after a command gets at most this long. `LrtmClient.send`
+# waits for the close only within its limit, and a longer close goes on in the
+# background.
 CLOSE_LIMIT = 1.0
 
 
@@ -116,14 +117,17 @@ class LrtmSession:
     async def close(self) -> None:
         """Close the socket and stop the reader."""
         self._mark_closed()
-        with suppress(TimeoutError, aiohttp.ClientError, ConnectionError):
-            async with asyncio.timeout(self._write_limit):
-                await self._ws.close()
-        task = self._task
-        if task is not None and not task.done():
-            task.cancel()
-            with suppress(asyncio.CancelledError):
-                await task
+        try:
+            with suppress(TimeoutError, aiohttp.ClientError, ConnectionError):
+                async with asyncio.timeout(self._write_limit):
+                    await self._ws.close()
+        finally:
+            # Also when the close itself is canceled, so no reader stays behind.
+            task = self._task
+            if task is not None and not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
 
     async def _request(
         self,
@@ -253,9 +257,17 @@ class LrtmClient:
         self._get_session = get_session
         self._recover_session = recover_session
         self._url = url
+        # Closes that go on after `send` returned. The set keeps the tasks alive.
+        self._closing: set[asyncio.Task[None]] = set()
 
     async def send(
-        self, sn: str, command: str, payload: Mapping[str, Any], *, limit: float
+        self,
+        sn: str,
+        command: str,
+        payload: Mapping[str, Any],
+        *,
+        limit: float,
+        still_wanted: Callable[[], bool] | None = None,
     ) -> None:
         """Publish `command` to the camera.
 
@@ -264,24 +276,47 @@ class LrtmClient:
         server cannot be reached or does not answer within `limit` seconds.
         When the failure comes after the socket took the publish frame, raise
         LrtmUnconfirmedError, because the camera may still apply the command.
+        When `still_wanted` returns False right before a publish, publish
+        nothing and raise LrtmTransportError.
         """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + limit
+        opened: list[LrtmSession] = []
         published = False
 
         def on_sent() -> None:
             nonlocal published
             published = True
 
+        async def attempt(session: Session) -> None:
+            lrtm = await self._open(session, opened)
+            # Nothing yields to the event loop between this check and the
+            # write of the publish frame, so a stop cannot slip in between.
+            if still_wanted is not None and not still_wanted():
+                raise LrtmTransportError("The command was stopped before it was sent")
+            await lrtm.publish(
+                REQUEST_CHANNEL.format(sn=sn),
+                device_command(sn, command, dict(payload)),
+                STEP_LIMIT,
+                on_sent=on_sent,
+            )
+
         try:
-            async with asyncio.timeout(limit):
-                session = await self._get_session()
-                try:
-                    await self._publish(session, sn, command, payload, on_sent)
-                except SiiPetAuthError:
-                    # The server answered with an auth error, so it did not
-                    # take the command and one more try is safe.
-                    published = False
-                    session = await self._recover_session(session)
-                    await self._publish(session, sn, command, payload, on_sent)
+            try:
+                async with asyncio.timeout_at(deadline):
+                    session = await self._get_session()
+                    try:
+                        await attempt(session)
+                    except SiiPetAuthError:
+                        # The server answered with an auth error, so it did
+                        # not take the command and one more try is safe.
+                        published = False
+                        session = await self._recover_session(session)
+                        await attempt(session)
+            finally:
+                # Outside the limit, so a slow close cannot turn an answer
+                # that came in time into a timeout.
+                await self._close(opened, deadline)
         except TimeoutError as err:
             if published:
                 raise LrtmUnconfirmedError from err
@@ -293,35 +328,41 @@ class LrtmClient:
                 raise LrtmUnconfirmedError from err
             raise
 
-    async def _publish(
-        self,
-        session: Session,
-        sn: str,
-        command: str,
-        payload: Mapping[str, Any],
-        on_sent: Callable[[], None],
-    ) -> None:
+    async def _open(self, session: Session, opened: list[LrtmSession]) -> LrtmSession:
+        """Open a connection and connect as the app. `opened` gets it for the close."""
         try:
             ws = await self._websession.ws_connect(self._url)
         except (aiohttp.ClientError, ConnectionError) as err:
             raise LrtmTransportError("Could not reach the realtime server") from err
         lrtm = LrtmSession(ws, write_limit=CLOSE_LIMIT)
-        try:
-            await lrtm.connect(
-                {
-                    "platform": PLATFORM,
-                    "appConnectData": {
-                        "token": session.token,
-                        "userId": session.user_id,
-                    },
+        opened.append(lrtm)
+        await lrtm.connect(
+            {
+                "platform": PLATFORM,
+                "appConnectData": {
+                    "token": session.token,
+                    "userId": session.user_id,
                 },
-                STEP_LIMIT,
-            )
-            await lrtm.publish(
-                REQUEST_CHANNEL.format(sn=sn),
-                device_command(sn, command, dict(payload)),
-                STEP_LIMIT,
-                on_sent=on_sent,
-            )
-        finally:
-            await lrtm.close()
+            },
+            STEP_LIMIT,
+        )
+        return lrtm
+
+    async def _close(self, sessions: list[LrtmSession], deadline: float) -> None:
+        """Close the connections, and wait for that until `deadline` at most.
+
+        A close that takes longer goes on in the background.
+        """
+        if not sessions:
+            return
+        loop = asyncio.get_running_loop()
+        task = loop.create_task(_close_all(sessions))
+        self._closing.add(task)
+        task.add_done_callback(self._closing.discard)
+        budget = min(CLOSE_LIMIT, deadline - loop.time())
+        if budget > 0:
+            await asyncio.wait({task}, timeout=budget)
+
+
+async def _close_all(sessions: list[LrtmSession]) -> None:
+    await asyncio.gather(*(lrtm.close() for lrtm in sessions))

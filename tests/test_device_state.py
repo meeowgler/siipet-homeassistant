@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import replace
 from datetime import timedelta
@@ -405,7 +406,11 @@ async def test_apply_fill_light(
         "SN0001", "fillLight", FILL_PAYLOAD_HIGH, limit=ANY
     )
     mock_control.send.assert_awaited_once_with(
-        "SN0001", "config.fillLight", FILL_PAYLOAD_HIGH, limit=ANY
+        "SN0001",
+        "config.fillLight",
+        FILL_PAYLOAD_HIGH,
+        limit=ANY,
+        still_wanted=ANY,
     )
     mock_client.get_device_settings.assert_awaited_once_with("SN0001", "1.2.3")
     assert hub.data["SN0001"].fill_light == 3
@@ -441,7 +446,11 @@ async def test_apply_privacy_sends_only_the_command(
     link.update_desired.assert_not_awaited()
     mock_client.get_device_settings.assert_not_awaited()
     mock_control.send.assert_awaited_once_with(
-        "SN0001", "config.privacyMode", {"active": True}, limit=ANY
+        "SN0001",
+        "config.privacyMode",
+        {"active": True},
+        limit=ANY,
+        still_wanted=ANY,
     )
 
 
@@ -1127,4 +1136,58 @@ async def test_cancel_while_waiting_in_line(
     )
     await hub.async_apply("SN0001", FillLightChange(level=3))
     assert mock_control.send.await_count == 2
+    assert hub._waiters == {}
+
+
+@pytest.mark.parametrize("stop", ["unload", "camera_removal"])
+@pytest.mark.parametrize(
+    ("change", "key"),
+    [
+        (PrivacyChange(active=True), "connection_not_ready"),
+        (MotionChange(level=2), "change_partial"),
+    ],
+)
+async def test_abandoned_change_publishes_nothing(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_control: AsyncMock,
+    config_entry: MockConfigEntry,
+    shadow_links: list[FakeShadowLink],
+    stop: str,
+    change: PrivacyChange | MotionChange,
+    key: str,
+) -> None:
+    """A change that stops while the command connects publishes nothing."""
+    hub, _link = await _hub(hass, config_entry, shadow_links)
+    release = asyncio.Event()
+    published: list[str] = []
+
+    async def send(
+        _sn: str,
+        command: str,
+        _payload: Any,
+        *,
+        limit: float,
+        still_wanted: Callable[[], bool],
+    ) -> None:
+        # As the realtime client does: connect, then check right before the publish.
+        await release.wait()
+        if not still_wanted():
+            raise LrtmTransportError("The command was stopped before it was sent")
+        published.append(command)
+
+    mock_control.send.side_effect = send
+    task = asyncio.ensure_future(hub.async_apply("SN0001", change))
+    await _until_sent(mock_control)
+    if stop == "unload":
+        assert await hass.config_entries.async_unload(config_entry.entry_id)
+    else:
+        _remove_camera(config_entry)
+    release.set()
+    with pytest.raises(HomeAssistantError) as err:
+        await task
+    assert err.value.translation_key == key
+    if key == "change_partial":
+        assert err.value.translation_placeholders["error"] == "the change was stopped"
+    assert published == []
     assert hub._waiters == {}
