@@ -579,7 +579,7 @@ The tests do not change device configuration or establish every transition.
 `BindDevice.isJoyPrivacyStatus` reads `privacyMode.active`.
 Use that field for the JOY1 app privacy state.
 The separate `privacyStatus` flag does not establish the same behavior.
-The samples contain `false` for both flags, so a privacy mode transition remains untested.
+The samples contain `false` for both flags. A live privacy mode change is in "Live checks".
 
 The `pir` object contains configuration for motion detection.
 It does not contain a motion event in the inspected replies.
@@ -1210,6 +1210,14 @@ These results come from tests against a real account.
   values, so only a report with the new value confirms a change.
 - A `config.fillLight` command with the reported values made the camera report
   again within about 0.5 seconds with the same values.
+- Privacy mode changed live for the first time, on a camera on battery. The
+  command `config.privacyMode` with `{"active": true}` and then `{"active": false}`
+  took 0.7 to 1.0 seconds. The camera reported `privacyMode.active` with the new
+  value 1.3 to 1.6 seconds after the command started. Each change gave exactly
+  one shadow report, the confirming one. No `desired` write was involved.
+- While Home Assistant opened realtime connections with the owner account's token,
+  the phone app of the same account stayed signed in and kept working on its home
+  screen. Live view was not open, so a parallel live video session is not covered.
 - The integration's own MQTT connection ran for 120 seconds against the owner account. It connected and reported a state for all 4 cameras. Its log held no serial number, shadow name, identity, or signed URL.
 - After the deploy of the device state, the invited-account instance created the device state entities of all 4 cameras. The owner instance showed battery values for all 4 cameras, all online, privacy mode off, and update mode manual. One camera on external power reported `charging: true` at 99% battery, the first live sample with that value.
 - Both instances ran the device state for 11 hours after a restart, through the planned reconnect before the IoT credentials expire.
@@ -1222,7 +1230,7 @@ These results come from tests against a real account.
 
 - Charging transitions, and behavior when a full battery is on external power.
 - Battery reporting intervals and observed changes through MQTT `/update/documents`.
-- Privacy and recording transitions, illumination code meanings, and configuration field units.
+- Recording transitions, illumination code meanings, and configuration field units.
 - Whether the iPhone uses the Android renewal condition.
 - How renewal behaves near or after the encoded token expiration, and how long
   the previous token remains valid after renewal.
