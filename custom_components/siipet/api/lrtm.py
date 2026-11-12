@@ -31,8 +31,8 @@ REQUEST_CHANNEL = "device:joy1:{sn}:app:dev:request"
 CLIENT_NAME = "java"
 # The platform that the Android app sends in its connect data.
 PLATFORM = 1
-# Centrifugo protocol errors for a token that is not valid or has expired.
-AUTH_ERROR_CODES = frozenset({101, 109})
+# The server answers an invalid token and an ended session token with 401.
+AUTH_ERROR_CODES = frozenset({401})
 # Each frame and each reply of one command gets at most this long.
 STEP_LIMIT = 10.0
 

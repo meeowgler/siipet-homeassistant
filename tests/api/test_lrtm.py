@@ -232,7 +232,7 @@ async def test_client_sends_like_the_app() -> None:
 
 async def test_auth_error_recovers_once() -> None:
     """An expired token signs in again through the client, then sends once more."""
-    first = FakeWS(responder=_reject_connect(109))
+    first = FakeWS(responder=_reject_connect(401))
     second = FakeWS()
     fresh = Session(make_token("user-0001"), 1_900_000_000_001)
     recover = AsyncMock(return_value=fresh)
@@ -245,7 +245,7 @@ async def test_auth_error_recovers_once() -> None:
 
 async def test_auth_error_without_recovery() -> None:
     """When the client cannot sign in again, the auth error goes to the caller."""
-    ws = FakeWS(responder=_reject_connect(101))
+    ws = FakeWS(responder=_reject_connect(401))
     with pytest.raises(SiiPetAuthError):
         await _client(FakeClientSession([ws])).send(
             "SN1", "config.privacyMode", {"active": True}, limit=5
@@ -261,6 +261,17 @@ async def test_server_error_keeps_only_the_code() -> None:
         )
     assert err.value.code == 103
     assert "SN1" not in str(err.value)
+
+
+@pytest.mark.parametrize("code", [101, 109])
+async def test_other_token_codes_are_server_errors(code: int) -> None:
+    """Only the 401 that the server sends is an auth error."""
+    ws = FakeWS(responder=_reject_connect(code))
+    with pytest.raises(LrtmServerError) as err:
+        await _client(FakeClientSession([ws])).send(
+            "SN1", "config.privacyMode", {"active": True}, limit=5
+        )
+    assert err.value.code == code
 
 
 async def test_unreachable_server() -> None:
