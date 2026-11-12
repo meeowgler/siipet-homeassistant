@@ -21,7 +21,13 @@ import uuid
 import aiohttp
 
 from .auth import Session
-from .errors import LrtmError, LrtmServerError, LrtmTransportError, SiiPetAuthError
+from .errors import (
+    LrtmError,
+    LrtmServerError,
+    LrtmTransportError,
+    LrtmUnconfirmedError,
+    SiiPetAuthError,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -35,6 +41,9 @@ PLATFORM = 1
 AUTH_ERROR_CODES = frozenset({401})
 # Each frame and each reply of one command gets at most this long.
 STEP_LIMIT = 10.0
+# Closing the socket after a command gets at most this long, so a stalled
+# close adds little to the limit of `LrtmClient.send`.
+CLOSE_LIMIT = 1.0
 
 
 def encode_command(command_id: int, method: str, params: dict[str, Any]) -> str:
@@ -89,10 +98,20 @@ class LrtmSession:
         )
 
     async def publish(
-        self, channel: str, data: dict[str, Any], limit: float
+        self,
+        channel: str,
+        data: dict[str, Any],
+        limit: float,
+        *,
+        on_sent: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
-        """Publish to a channel and return the publish reply."""
-        return await self._request("publish", {"channel": channel, "data": data}, limit)
+        """Publish to a channel and return the publish reply.
+
+        `on_sent` runs once the socket took the publish frame.
+        """
+        return await self._request(
+            "publish", {"channel": channel, "data": data}, limit, on_sent
+        )
 
     async def close(self) -> None:
         """Close the socket and stop the reader."""
@@ -107,7 +126,11 @@ class LrtmSession:
                 await task
 
     async def _request(
-        self, method: str, params: dict[str, Any], limit: float
+        self,
+        method: str,
+        params: dict[str, Any],
+        limit: float,
+        on_sent: Callable[[], None] | None = None,
     ) -> dict[str, Any]:
         self._command_id += 1
         command_id = self._command_id
@@ -118,6 +141,8 @@ class LrtmSession:
         try:
             async with asyncio.timeout(limit):
                 await self._send(encode_command(command_id, method, params))
+                if on_sent is not None:
+                    on_sent()
                 return await future
         except TimeoutError as err:
             raise LrtmTransportError(
@@ -237,30 +262,50 @@ class LrtmClient:
         Raise SiiPetAuthError when the session cannot be recovered,
         LrtmServerError for an error answer, and LrtmTransportError when the
         server cannot be reached or does not answer within `limit` seconds.
+        When the failure comes after the socket took the publish frame, raise
+        LrtmUnconfirmedError, because the camera may still apply the command.
         """
+        published = False
+
+        def on_sent() -> None:
+            nonlocal published
+            published = True
+
         try:
             async with asyncio.timeout(limit):
                 session = await self._get_session()
                 try:
-                    await self._publish(session, sn, command, payload)
+                    await self._publish(session, sn, command, payload, on_sent)
                 except SiiPetAuthError:
-                    # The server answered the connect with an auth error, so
-                    # nothing was published and one more try is safe.
+                    # The server answered with an auth error, so it did not
+                    # take the command and one more try is safe.
+                    published = False
                     session = await self._recover_session(session)
-                    await self._publish(session, sn, command, payload)
+                    await self._publish(session, sn, command, payload, on_sent)
         except TimeoutError as err:
+            if published:
+                raise LrtmUnconfirmedError from err
             raise LrtmTransportError(
                 "The realtime server did not answer in time"
             ) from err
+        except LrtmTransportError as err:
+            if published:
+                raise LrtmUnconfirmedError from err
+            raise
 
     async def _publish(
-        self, session: Session, sn: str, command: str, payload: Mapping[str, Any]
+        self,
+        session: Session,
+        sn: str,
+        command: str,
+        payload: Mapping[str, Any],
+        on_sent: Callable[[], None],
     ) -> None:
         try:
             ws = await self._websession.ws_connect(self._url)
         except (aiohttp.ClientError, ConnectionError) as err:
             raise LrtmTransportError("Could not reach the realtime server") from err
-        lrtm = LrtmSession(ws)
+        lrtm = LrtmSession(ws, write_limit=CLOSE_LIMIT)
         try:
             await lrtm.connect(
                 {
@@ -276,6 +321,7 @@ class LrtmClient:
                 REQUEST_CHANNEL.format(sn=sn),
                 device_command(sn, command, dict(payload)),
                 STEP_LIMIT,
+                on_sent=on_sent,
             )
         finally:
             await lrtm.close()

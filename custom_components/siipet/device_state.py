@@ -22,6 +22,7 @@ from .api import (
     DeviceState,
     FeatureRules,
     LrtmClient,
+    LrtmUnconfirmedError,
     SettingUnavailableError,
     ShadowWriteError,
     SiiPetAuthError,
@@ -61,6 +62,15 @@ class _Waiter:
         """True when the camera reported every expected field."""
         future = self.future
         return future.done() and not future.cancelled() and future.exception() is None
+
+    def abandoned(self) -> bool:
+        """True when the entry unloaded or the camera left."""
+        future = self.future
+        return (
+            future.done()
+            and not future.cancelled()
+            and isinstance(future.exception(), _Abandoned)
+        )
 
 
 class SiiPetDeviceCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
@@ -172,6 +182,8 @@ class SiiPetDeviceCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
         state = self._ready_state(sn)
         settings = DeviceSettings()
         if group is not SettingGroup.PRIVACY:
+            if remaining() <= 0:
+                raise self._error("change_not_sent", sn, error="timeout")
             try:
                 async with asyncio.timeout(remaining()):
                     if not await self._async_feature_enabled(state):
@@ -194,7 +206,7 @@ class SiiPetDeviceCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
         self._waiters.setdefault(sn, []).append(waiter)
         try:
             try:
-                await self._async_send(sn, planned, remaining)
+                await self._async_send(sn, planned, waiter, remaining)
             except HomeAssistantError:
                 # A camera can apply the desired write and report it before
                 # the command fails. It then has the setting, so the change
@@ -215,7 +227,11 @@ class SiiPetDeviceCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
             self._remove_waiter(sn, waiter)
 
     async def _async_send(
-        self, sn: str, planned: PlannedChange, remaining: Callable[[], float]
+        self,
+        sn: str,
+        planned: PlannedChange,
+        waiter: _Waiter,
+        remaining: Callable[[], float],
     ) -> None:
         """Write desired when the link can, then send the command."""
         desired_written = False
@@ -239,12 +255,25 @@ class SiiPetDeviceCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
                 _LOGGER.debug(
                     "AWS IoT did not confirm the desired write of %s", self._label(sn)
                 )
+        # The entry can unload, or the camera leave, during the desired write.
+        # Nothing then waits for the report, so the command stays unsent.
+        if self._stopped or sn not in self._shadows or waiter.abandoned():
+            if desired_written:
+                raise self._error("change_partial", sn, error="the change was stopped")
+            raise self._error("connection_not_ready", sn)
         left = remaining()
         if left <= 0:
             key = "change_partial" if desired_written else "change_not_sent"
             raise self._error(key, sn, error="timeout")
         try:
             await self._lrtm.send(sn, planned.command, planned.payload, limit=left)
+        except LrtmUnconfirmedError:
+            # The command went out, so the camera may still apply it. Its
+            # report decides.
+            _LOGGER.debug(
+                "The realtime server did not confirm the command for %s",
+                self._label(sn),
+            )
         except SiiPetAuthError as err:
             self.config_entry.async_start_reauth(self.hass)
             key = "change_partial" if desired_written else "request_failed"

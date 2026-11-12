@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import suppress
 from dataclasses import replace
 from datetime import timedelta
 from typing import Any
@@ -28,6 +29,7 @@ from custom_components.siipet.api import (
     FeatureRules,
     LrtmServerError,
     LrtmTransportError,
+    LrtmUnconfirmedError,
     ShadowWriteError,
     SiiPetAuthError,
 )
@@ -367,12 +369,25 @@ async def _expire(hass: HomeAssistant, freezer: FrozenDateTimeFactory) -> None:
     await hass.async_block_till_done()
 
 
-async def _until_sent(mock_control: AsyncMock, count: int = 1) -> None:
+async def _until_awaited(method: AsyncMock, count: int = 1) -> None:
     for _ in range(100):
-        if mock_control.send.await_count >= count:
+        if method.await_count >= count:
             return
         await asyncio.sleep(0)
-    raise AssertionError("The command was not sent")
+    raise AssertionError("The call did not start")
+
+
+async def _until_sent(mock_control: AsyncMock, count: int = 1) -> None:
+    await _until_awaited(mock_control.send, count)
+
+
+def _remove_camera(config_entry: MockConfigEntry, sn: str = "SN0001") -> None:
+    """Drop a camera from the camera list, as a camera sync does."""
+    coordinator = config_entry.runtime_data.coordinator
+    cameras = {
+        key: camera for key, camera in coordinator.data.cameras.items() if key != sn
+    }
+    coordinator.async_set_updated_data(replace(coordinator.data, cameras=cameras))
 
 
 async def test_apply_fill_light(
@@ -891,11 +906,7 @@ async def test_camera_removal_ends_the_wait(
     hub, _link = await _hub(hass, config_entry, shadow_links)
     task = asyncio.ensure_future(hub.async_apply("SN0001", PrivacyChange(active=True)))
     await _until_sent(mock_control)
-    coordinator = config_entry.runtime_data.coordinator
-    cameras = {
-        sn: camera for sn, camera in coordinator.data.cameras.items() if sn != "SN0001"
-    }
-    coordinator.async_set_updated_data(replace(coordinator.data, cameras=cameras))
+    _remove_camera(config_entry)
     with pytest.raises(HomeAssistantError) as err:
         await task
     assert err.value.translation_key == "change_not_confirmed"
@@ -911,16 +922,10 @@ async def test_camera_leaves_during_the_reads(
 ) -> None:
     """A camera that leaves while the change reads its detail gets nothing."""
     hub, link = await _hub(hass, config_entry, shadow_links)
-    coordinator = config_entry.runtime_data.coordinator
     settings = mock_client.get_device_settings.return_value
 
     def leave(*_args: Any, **_kwargs: Any) -> Any:
-        cameras = {
-            sn: camera
-            for sn, camera in coordinator.data.cameras.items()
-            if sn != "SN0001"
-        }
-        coordinator.async_set_updated_data(replace(coordinator.data, cameras=cameras))
+        _remove_camera(config_entry)
         return settings
 
     mock_client.get_device_settings.side_effect = leave
@@ -929,3 +934,197 @@ async def test_camera_leaves_during_the_reads(
     assert err.value.translation_key == "setting_unknown"
     link.update_desired.assert_not_awaited()
     mock_control.send.assert_not_awaited()
+
+
+@pytest.mark.parametrize("stop", ["unload", "camera_removal"])
+async def test_abandoned_change_sends_no_command(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_control: AsyncMock,
+    config_entry: MockConfigEntry,
+    shadow_links: list[FakeShadowLink],
+    stop: str,
+) -> None:
+    """A change that stops during the desired write sends no command."""
+    hub, link = await _hub(hass, config_entry, shadow_links)
+    release = asyncio.Event()
+
+    async def write(*_args: Any, **_kwargs: Any) -> WriteResult:
+        await release.wait()
+        return WriteResult.ACCEPTED
+
+    link.update_desired.side_effect = write
+    task = asyncio.ensure_future(hub.async_apply("SN0001", MotionChange(level=2)))
+    await _until_awaited(link.update_desired)
+    if stop == "unload":
+        assert await hass.config_entries.async_unload(config_entry.entry_id)
+    else:
+        _remove_camera(config_entry)
+    release.set()
+    with pytest.raises(HomeAssistantError) as err:
+        await task
+    assert err.value.translation_key == "change_partial"
+    assert err.value.translation_placeholders["error"] == "the change was stopped"
+    mock_control.send.assert_not_awaited()
+    assert hub._waiters == {}
+
+
+async def test_unconfirmed_command_waits_for_the_report(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_control: AsyncMock,
+    config_entry: MockConfigEntry,
+    shadow_links: list[FakeShadowLink],
+) -> None:
+    """A command that went out without an answer is confirmed by the report."""
+    hub, link = await _hub(hass, config_entry, shadow_links)
+    mock_control.send.side_effect = LrtmUnconfirmedError()
+    task = asyncio.ensure_future(hub.async_apply("SN0001", PrivacyChange(active=True)))
+    await _until_sent(mock_control)
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert not task.done()
+    link.on_state("SN0001", replace(DEVICE_STATE, privacy=True))
+    await task
+    assert hub._waiters == {}
+
+
+async def test_unconfirmed_command_without_report(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_control: AsyncMock,
+    config_entry: MockConfigEntry,
+    shadow_links: list[FakeShadowLink],
+    frozen_time: FrozenDateTimeFactory,
+) -> None:
+    """A command without an answer and without a report is not confirmed."""
+    hub, _link = await _hub(hass, config_entry, shadow_links)
+    mock_control.send.side_effect = LrtmUnconfirmedError()
+    task = asyncio.ensure_future(hub.async_apply("SN0001", PrivacyChange(active=True)))
+    await _until_sent(mock_control)
+    await _expire(hass, frozen_time)
+    with pytest.raises(HomeAssistantError) as err:
+        await task
+    assert err.value.translation_key == "change_not_confirmed"
+    assert hub._waiters == {}
+
+
+async def test_no_read_without_time(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_control: AsyncMock,
+    config_entry: MockConfigEntry,
+    shadow_links: list[FakeShadowLink],
+    frozen_time: FrozenDateTimeFactory,
+) -> None:
+    """A change whose turn comes with no time left reads nothing."""
+    hub, link = await _hub(hass, config_entry, shadow_links)
+    release = asyncio.Event()
+
+    async def slow_command(*_args: Any, **_kwargs: Any) -> None:
+        await release.wait()
+        frozen_time.tick(CHANGE_TIMEOUT)
+        # A new firmware, so the next change would read the detail again.
+        link.on_state("SN0001", replace(DEVICE_STATE, motion_level=2, firmware="1.2.4"))
+
+    mock_control.send.side_effect = slow_command
+    first = asyncio.ensure_future(hub.async_apply("SN0001", MotionChange(level=2)))
+    await _until_sent(mock_control)
+    second = asyncio.ensure_future(hub.async_apply("SN0001", MotionChange(level=3)))
+    await asyncio.sleep(0)
+    release.set()
+    await first
+    with pytest.raises(HomeAssistantError) as err:
+        await second
+    assert err.value.translation_key == "change_not_sent"
+    assert err.value.translation_placeholders["error"] == "timeout"
+    assert mock_client.get_device_settings.await_count == 1
+    assert link.update_desired.await_count == 1
+    assert mock_control.send.await_count == 1
+
+
+async def test_unconfirmed_write_still_sends_the_command(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_control: AsyncMock,
+    config_entry: MockConfigEntry,
+    shadow_links: list[FakeShadowLink],
+) -> None:
+    """A desired write without an answer counts as written."""
+    hub, link = await _hub(hass, config_entry, shadow_links)
+    link.update_desired.return_value = WriteResult.UNCONFIRMED
+    mock_control.send.side_effect = camera_reports(link, motion_level=2)
+    await hub.async_apply("SN0001", MotionChange(level=2))
+    mock_control.send.assert_awaited_once()
+    mock_control.send.side_effect = LrtmTransportError("Could not reach")
+    with pytest.raises(HomeAssistantError) as err:
+        await hub.async_apply("SN0001", MotionChange(level=3))
+    assert err.value.translation_key == "change_partial"
+
+
+async def test_desired_not_ready(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_control: AsyncMock,
+    config_entry: MockConfigEntry,
+    shadow_links: list[FakeShadowLink],
+) -> None:
+    """A desired write that cannot leave sends no command."""
+    hub, link = await _hub(hass, config_entry, shadow_links)
+    link.update_desired.side_effect = ShadowWriteError("not_ready")
+    with pytest.raises(HomeAssistantError) as err:
+        await hub.async_apply("SN0001", MotionChange(level=2))
+    assert err.value.translation_key == "connection_not_ready"
+    mock_control.send.assert_not_awaited()
+    assert hub._waiters == {}
+
+
+async def test_cancel_while_waiting_for_the_report(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_control: AsyncMock,
+    config_entry: MockConfigEntry,
+    shadow_links: list[FakeShadowLink],
+) -> None:
+    """A canceled change frees its group and leaves no waiter."""
+    hub, link = await _hub(hass, config_entry, shadow_links)
+    task = asyncio.ensure_future(hub.async_apply("SN0001", PrivacyChange(active=True)))
+    await _until_sent(mock_control)
+    task.cancel()
+    with suppress(asyncio.CancelledError):
+        await task
+    assert task.cancelled()
+    assert hub._waiters == {}
+    mock_control.send.side_effect = camera_reports(link, privacy=True)
+    await hub.async_apply("SN0001", PrivacyChange(active=True))
+    assert mock_control.send.await_count == 2
+
+
+async def test_cancel_while_waiting_in_line(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_control: AsyncMock,
+    config_entry: MockConfigEntry,
+    shadow_links: list[FakeShadowLink],
+) -> None:
+    """A change canceled in line sends nothing and keeps the line going."""
+    hub, link = await _hub(hass, config_entry, shadow_links)
+    first = asyncio.ensure_future(
+        hub.async_apply("SN0001", FillLightChange(auto=False))
+    )
+    await _until_sent(mock_control)
+    second = asyncio.ensure_future(hub.async_apply("SN0001", FillLightChange(level=3)))
+    await asyncio.sleep(0)
+    second.cancel()
+    with suppress(asyncio.CancelledError):
+        await second
+    assert second.cancelled()
+    link.on_state("SN0001", replace(DEVICE_STATE, fill_light_auto=False))
+    await first
+    assert mock_control.send.await_count == 1
+    mock_control.send.side_effect = camera_reports(
+        link, fill_light=3, fill_light_auto=False
+    )
+    await hub.async_apply("SN0001", FillLightChange(level=3))
+    assert mock_control.send.await_count == 2
+    assert hub._waiters == {}

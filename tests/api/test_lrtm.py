@@ -14,6 +14,7 @@ import pytest
 from custom_components.siipet.api import (
     LrtmServerError,
     LrtmTransportError,
+    LrtmUnconfirmedError,
     Session,
     SiiPetAuthError,
 )
@@ -284,11 +285,101 @@ async def test_unreachable_server() -> None:
 async def test_no_answer_in_time() -> None:
     """A server that never answers is a transport error after the limit."""
     ws = FakeWS(auto=False)
+    with pytest.raises(LrtmTransportError) as err:
+        await _client(FakeClientSession([ws])).send(
+            "SN1", "config.fillLight", {}, limit=0.1
+        )
+    # The connect was not answered, so nothing was published.
+    assert not isinstance(err.value, LrtmUnconfirmedError)
+    assert ws.closed
+
+
+class StuckCloseWS(FakeWS):
+    """A FakeWS whose close never returns."""
+
+    async def close(self) -> None:
+        self.closed = True
+        await asyncio.Event().wait()
+
+
+async def test_stalled_close_stays_near_the_limit() -> None:
+    """A socket that does not close costs about a second after the limit."""
+    ws = StuckCloseWS(auto=False)
+    loop = asyncio.get_running_loop()
+    start = loop.time()
     with pytest.raises(LrtmTransportError):
         await _client(FakeClientSession([ws])).send(
             "SN1", "config.fillLight", {}, limit=0.1
         )
+    assert loop.time() - start < 1.5
+
+
+def _answer(publish: Any) -> Any:
+    """Answer the connect, and run `publish` for the publish frame."""
+
+    async def responder(ws: FakeWS, data: str) -> None:
+        frame = json.loads(data)
+        if "connect" in frame:
+            ws.feed(json.dumps({"id": frame["id"], "connect": {"client": "c-1"}}))
+        elif "publish" in frame:
+            await publish(ws)
+
+    return responder
+
+
+async def _no_answer(ws: FakeWS) -> None:
+    pass
+
+
+async def _close(ws: FakeWS) -> None:
+    ws.error()
+
+
+@pytest.mark.parametrize("publish", [_no_answer, _close])
+async def test_publish_without_answer_is_unconfirmed(publish: Any) -> None:
+    """A publish that went out without an answer can still reach the camera."""
+    ws = FakeWS(responder=_answer(publish))
+    with pytest.raises(LrtmUnconfirmedError):
+        await _client(FakeClientSession([ws])).send(
+            "SN1", "config.fillLight", {}, limit=0.2
+        )
     assert ws.closed
+
+
+async def test_publish_not_written_is_not_sent() -> None:
+    """A publish frame that the socket did not take did not reach the camera."""
+
+    async def fail(ws: FakeWS) -> None:
+        raise ConnectionError("reset")
+
+    ws = FakeWS(responder=_answer(fail))
+    with pytest.raises(LrtmTransportError) as err:
+        await _client(FakeClientSession([ws])).send(
+            "SN1", "config.fillLight", {}, limit=5
+        )
+    assert not isinstance(err.value, LrtmUnconfirmedError)
+
+
+async def test_refused_publish_then_unreachable_is_not_sent() -> None:
+    """After a refused publish and a new sign-in, a retry that cannot connect sent nothing."""
+
+    async def refuse(ws: FakeWS) -> None:
+        frame = json.loads(ws.sent[-1])
+        ws.feed(json.dumps({"id": frame["id"], "error": {"code": 401}}))
+
+    first = FakeWS(responder=_answer(refuse))
+
+    class Websession(FakeClientSession):
+        async def ws_connect(self, url: str, **kwargs: Any) -> FakeWS:
+            if self._sockets:
+                return self._sockets.pop(0)
+            raise aiohttp.ClientError
+
+    fresh = Session(make_token("user-0001"), 1_900_000_000_001)
+    client = _client(Websession([first]), AsyncMock(return_value=fresh))
+    with pytest.raises(LrtmTransportError) as err:
+        await client.send("SN1", "config.privacyMode", {"active": True}, limit=5)
+    assert not isinstance(err.value, LrtmUnconfirmedError)
 
 
 async def test_cameras_do_not_wait_for_each_other() -> None:

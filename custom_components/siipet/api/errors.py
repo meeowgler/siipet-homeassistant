@@ -52,6 +52,17 @@ class LrtmTransportError(LrtmError):
     """The realtime server could not be reached, did not answer, or closed."""
 
 
+class LrtmUnconfirmedError(LrtmTransportError):
+    """The command went out, but the realtime server did not confirm it.
+
+    The camera may still apply the command.
+    """
+
+    def __init__(self) -> None:
+        """Use a fixed text."""
+        super().__init__("The realtime server did not confirm the command")
+
+
 class LrtmServerError(LrtmError):
     """The realtime server answered a command with an error code."""
 
