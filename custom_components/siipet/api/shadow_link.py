@@ -146,9 +146,9 @@ class ShadowLink:
         self._writable: set[str] = set()
         self._writes_refused: set[str] = set()
         self._writes_paused: dict[str, datetime] = {}
-        # Cameras that go without their write replies for the rest of the
-        # connection: their writes were on hold at the write-reply step, or
-        # that step failed and paused them.
+        # Cameras whose write replies this connection skipped, because their
+        # writes were on hold at the write-reply step, or because that step
+        # failed and paused them.
         self._writes_skipped: set[str] = set()
         self._writes: dict[str, asyncio.Future[bool]] = {}
         self._denied: dict[str, datetime] = {}
@@ -460,11 +460,11 @@ class ShadowLink:
 
         This holds when AWS IoT refused the write replies of the camera, while
         its writes are paused, and for the rest of a connection on which the
-        camera went without its write replies because of a pause. A refusal
-        lasts until AWS IoT grants the write replies on a later start. After
-        the pause, a camera that has not reached its write-reply step on the
-        current connection is not refused, because that step tries the write
-        replies again.
+        write-reply step of the camera was skipped during a pause or failed
+        and started one. A refusal lasts until AWS IoT grants the write
+        replies on a later start. After the pause, a camera that has not
+        reached its write-reply step on the current connection is not refused
+        because of the pause, because that step tries the write replies again.
         """
         return (
             sn in self._writes_refused
