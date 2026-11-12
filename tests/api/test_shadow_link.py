@@ -704,8 +704,17 @@ async def test_cameras_that_start_again_are_not_refused() -> None:
         assert running.recorder.connection == [True]
 
 
-async def test_paused_camera_is_not_refused_while_it_starts_again() -> None:
-    """After its pause ends, a camera is not refused until it starts on a new connection, and then can write."""
+@pytest.mark.parametrize(
+    "held",
+    [
+        # SN0001 waits for its own reads.
+        "SN0001",
+        # SN0001 has read and waits for its write replies while SN0002 reads.
+        "SN0002",
+    ],
+)
+async def test_paused_camera_is_not_refused_while_it_starts_again(held: str) -> None:
+    """After its pause ends, a camera is not refused until a new connection tries its write replies, and then can write."""
     issued = [_credentials(), _credentials(hours=20)]
     renew = asyncio.Event()
 
@@ -721,8 +730,8 @@ async def test_paused_camera_is_not_refused_while_it_starts_again() -> None:
         await running.link.update_desired("SN0001", "pir", {"level": 2}, limit=1)
         await _until(lambda: running.recorder.connection == [True, False, True])
         assert running.link.writes_refused("SN0001")
-        # The new start of the camera waits for the reply time.
-        broker.silent_get.add("SN0001")
+        # The next reads of the held camera wait for the reply time.
+        broker.silent_get.add(held)
         # The pause ends, and the first credentials need renewal, so the link
         # reconnects. It waits for new credentials until the test lets it go on.
         running.clock.offset = timedelta(hours=10)
@@ -730,14 +739,30 @@ async def test_paused_camera_is_not_refused_while_it_starts_again() -> None:
         assert running.link.status.connected
         assert not running.link.can_write("SN0001")
         assert not running.link.writes_refused("SN0001")
+        # The old connection is closed, so each later read is on the new one.
+        reads = len(broker.gets)
         renew.set()
-        await _until(lambda: len(broker.connections) == 3)
+        held_read = shadow_topic(held, "fake_systemInfo", "get")
+        await _until(lambda: held_read in broker.gets[reads:])
         assert not running.link.can_write("SN0001")
         assert not running.link.writes_refused("SN0001")
         await _until(lambda: running.link.can_write("SN0001"))
         assert not running.link.writes_refused("SN0001")
         assert f"{UPDATE}/accepted" in broker.connections[2].subscriptions
         assert running.recorder.connection == [True, False, True]
+
+
+async def test_failed_write_replies_stay_refused_after_the_pause() -> None:
+    """A camera whose write reply subscription failed stays refused after the pause while its connection stays open."""
+    broker = _broker(silent_topics={f"{UPDATE}/accepted"})
+    async with _running(broker) as running:
+        await _until(lambda: running.recorder.connection == [True])
+        assert running.link.writes_refused("SN0001")
+        running.clock.offset = FAST.denied_retry
+        assert running.link.writes_refused("SN0001")
+        assert not running.link.can_write("SN0001")
+        assert running.link.can_write("SN0002")
+        assert len(broker.connections) == 1
 
 
 async def test_update_desired_ignores_other_tokens() -> None:

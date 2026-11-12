@@ -306,8 +306,9 @@ class SiiPetDeviceCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
         if self._link.can_write(sn):
             return True
         if self._link.writes_refused(sn):
-            # AWS IoT refused the write replies of this camera, or its writes
-            # are paused. The command alone still changes the setting.
+            # AWS IoT refused the write replies of this camera, or the link
+            # skipped them because the writes of the camera were paused. The
+            # command alone still changes the setting.
             _LOGGER.debug("The shadow of %s cannot be written", self._label(sn))
             return False
         # The command alone would leave the old value in the desired state.

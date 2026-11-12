@@ -146,6 +146,10 @@ class ShadowLink:
         self._writable: set[str] = set()
         self._writes_refused: set[str] = set()
         self._writes_paused: dict[str, datetime] = {}
+        # Cameras that go without their write replies for the rest of the
+        # connection: their writes were on hold at the write-reply step, or
+        # that step failed and paused them.
+        self._writes_skipped: set[str] = set()
         self._writes: dict[str, asyncio.Future[bool]] = {}
         self._denied: dict[str, datetime] = {}
         self._denied_logged: set[str] = set()
@@ -260,10 +264,11 @@ class ShadowLink:
             await self._serve(session, credentials)
         finally:
             self._session = None
-            # Each camera starts again on the next connection. Until then it
-            # counts as not started, also for `writes_refused`.
+            # Each camera starts again on the next connection, and that start
+            # decides its write replies again.
             self._started.clear()
             self._writable.clear()
+            self._writes_skipped.clear()
             await session.close()
 
     async def _current_credentials(self) -> IotCredentials:
@@ -328,12 +333,12 @@ class ShadowLink:
         for sn, shadows in started:
             # set_cameras can replace or remove a camera, and a read can deny
             # it, while other cameras start.
-            if (
-                self._cameras.get(sn) == shadows
-                and sn in self._started
-                and not self._writes_on_hold(sn)
-            ):
-                await self._subscribe_updates(session, sn, shadows)
+            if self._cameras.get(sn) != shadows or sn not in self._started:
+                continue
+            if self._writes_on_hold(sn):
+                self._writes_skipped.add(sn)
+                continue
+            await self._subscribe_updates(session, sn, shadows)
 
     async def _start_camera(
         self, session: MqttSession, sn: str, shadows: CameraShadows
@@ -396,8 +401,9 @@ class ShadowLink:
         AWS IoT can refuse these topics to an account that may read. A refusal
         only means that the camera cannot be written, so it never denies the
         camera. A subscription that fails pauses the writes of the camera, so
-        the next start reads it without them. Neither counts a strike. The
-        error ends the connection only when the connection is already closed.
+        the connection goes on without them, and the next start reads it
+        without them. Neither counts a strike. The error ends the connection
+        only when the connection is already closed.
         """
         topics = [shadow_topic(sn, shadows.config, suffix) for suffix in UPDATE_REPLIES]
         try:
@@ -406,6 +412,8 @@ class ShadowLink:
             self._pause_writes(sn, shadows)
             if session.closed:
                 raise
+            if self._cameras.get(sn) == shadows:
+                self._writes_skipped.add(sn)
             return
         if self._cameras.get(sn) != shadows:
             return
@@ -415,6 +423,7 @@ class ShadowLink:
             return
         self._writes_refused.discard(sn)
         self._writes_paused.pop(sn, None)
+        self._writes_skipped.discard(sn)
         self._writable.add(sn)
 
     def _pause_writes(self, sn: str, shadows: CameraShadows) -> None:
@@ -450,16 +459,17 @@ class ShadowLink:
         """True when a change to the camera must go without a desired write.
 
         This holds when AWS IoT refused the write replies of the camera, while
-        its writes are paused, and after the pause while the camera stays
-        started without its write replies. A refusal lasts until a later start
-        subscribes the write replies. After the pause, a camera that is not
-        started on the current connection is not refused, because its start
-        subscribes the write replies.
+        its writes are paused, and for the rest of a connection on which the
+        camera went without its write replies because of a pause. A refusal
+        lasts until AWS IoT grants the write replies on a later start. After
+        the pause, a camera that has not reached its write-reply step on the
+        current connection is not refused, because that step tries the write
+        replies again.
         """
         return (
             sn in self._writes_refused
             or self._writes_on_hold(sn)
-            or (sn in self._writes_paused and sn in self._started)
+            or sn in self._writes_skipped
         )
 
     def can_write(self, sn: str) -> bool:
@@ -664,6 +674,7 @@ class ShadowLink:
         self._denied[sn] = self._clock()
         self._started.discard(sn)
         self._writable.discard(sn)
+        self._writes_skipped.discard(sn)
         self._strikes.pop(sn, None)
         self._parts.pop(sn, None)
         for kind in SHADOW_KINDS:
@@ -688,6 +699,7 @@ class ShadowLink:
         self._writable.discard(sn)
         self._writes_refused.discard(sn)
         self._writes_paused.pop(sn, None)
+        self._writes_skipped.discard(sn)
         self._denied.pop(sn, None)
         self._denied_logged.discard(sn)
         self._callback_warned.discard(sn)
