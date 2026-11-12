@@ -82,6 +82,8 @@ class FakeShadowLink:
             denied_cameras=1,
         )
         self.writable = True
+        # With `writable` False: True means command only, False means not ready.
+        self.refused = False
         self.update_desired = AsyncMock(return_value=WriteResult.ACCEPTED)
 
     def set_cameras(self, cameras: Mapping[str, CameraShadows]) -> None:
@@ -89,6 +91,9 @@ class FakeShadowLink:
 
     def can_write(self, sn: str) -> bool:
         return self.writable and self.status.connected
+
+    def writes_refused(self, sn: str) -> bool:
+        return self.refused
 
     async def run(self) -> None:
         # By default the fake returns at once, because the tests of the local

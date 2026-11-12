@@ -144,6 +144,7 @@ class ShadowLink:
         self._pending: dict[tuple[str, str], asyncio.Future[None]] = {}
         self._started: set[str] = set()
         self._writable: set[str] = set()
+        self._writes_refused: set[str] = set()
         self._writes_paused: dict[str, datetime] = {}
         self._writes: dict[str, asyncio.Future[bool]] = {}
         self._denied: dict[str, datetime] = {}
@@ -389,11 +390,15 @@ class ShadowLink:
             if session.closed:
                 raise
             return
+        if self._cameras.get(sn) != shadows:
+            return
         if not all(granted):
+            self._writes_refused.add(sn)
             _LOGGER.debug("SiiPet refused the write replies of %s", self._label(sn))
-        elif self._cameras.get(sn) == shadows:
-            self._writes_paused.pop(sn, None)
-            self._writable.add(sn)
+            return
+        self._writes_refused.discard(sn)
+        self._writes_paused.pop(sn, None)
+        self._writable.add(sn)
 
     def _pause_writes(self, sn: str, shadows: CameraShadows) -> None:
         """Make the camera not writable, and skip its write replies for the retry time."""
@@ -423,6 +428,14 @@ class ShadowLink:
         return paused_at is not None and (
             self._clock() - paused_at < self._timings.denied_retry
         )
+
+    def writes_refused(self, sn: str) -> bool:
+        """True when AWS IoT refused the write replies of the camera, or its writes are paused.
+
+        Both last until a later start subscribes the write replies of the
+        camera.
+        """
+        return sn in self._writes_refused or sn in self._writes_paused
 
     def can_write(self, sn: str) -> bool:
         """True while the link is connected and can confirm writes for the camera."""
@@ -648,6 +661,7 @@ class ShadowLink:
         self._parts.pop(sn, None)
         self._started.discard(sn)
         self._writable.discard(sn)
+        self._writes_refused.discard(sn)
         self._writes_paused.pop(sn, None)
         self._denied.pop(sn, None)
         self._denied_logged.discard(sn)

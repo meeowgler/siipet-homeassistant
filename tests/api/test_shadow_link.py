@@ -642,10 +642,46 @@ async def test_update_desired_unconfirmed_when_the_connection_drops() -> None:
         assert read in second.subscriptions
         assert f"{UPDATE}/accepted" not in second.subscriptions
         assert not running.link.can_write("SN0001")
+        assert running.link.writes_refused("SN0001")
         assert running.link.can_write("SN0002")
+        assert not running.link.writes_refused("SN0002")
         assert running.recorder.dropped == []
         assert running.link.status.denied_cameras == 0
         assert len(running.broker.connections) == 2
+
+
+async def test_writes_stay_refused_until_the_write_replies_subscribe() -> None:
+    """After the pause ends, the camera stays read-only until a new start subscribes its write replies."""
+    timings = replace(FAST, denied_retry=timedelta(seconds=0.2))
+    broker = _broker(close_on_update={"SN0001"})
+    async with _running(broker, timings=timings) as running:
+        await _started(running)
+        await running.link.update_desired("SN0001", "pir", {"level": 2}, limit=1)
+        await _until(lambda: running.recorder.connection == [True, False, True])
+        await asyncio.sleep(0.3)
+        assert not running.link.can_write("SN0001")
+        assert running.link.writes_refused("SN0001")
+        assert len(broker.connections) == 2
+
+
+async def test_cameras_that_start_again_are_not_refused() -> None:
+    """During a planned reconnect, a camera that has not started again cannot write, and is not refused."""
+    soon = replace(
+        _credentials(),
+        expires=datetime.now(UTC) + timedelta(minutes=10, seconds=0.5),
+    )
+    fetch = AsyncMock(side_effect=[soon, _credentials()])
+    broker = _broker()
+    async with _running(broker, fetch=fetch) as running:
+        await _started(running)
+        # The new start of the camera waits for the reply time.
+        broker.silent_get.add("SN0001")
+        await _until(lambda: len(broker.connections) == 2)
+        assert running.link.status.connected
+        assert not running.link.can_write("SN0001")
+        assert not running.link.writes_refused("SN0001")
+        await _until(lambda: running.link.can_write("SN0001"))
+        assert running.recorder.connection == [True]
 
 
 async def test_update_desired_ignores_other_tokens() -> None:
@@ -668,6 +704,8 @@ async def test_refused_update_replies_keep_the_reads() -> None:
     async with _running(_broker(deny_topics=refused)) as running:
         await _until(lambda: running.recorder.connection == [True])
         assert not running.link.can_write("SN0001")
+        assert running.link.writes_refused("SN0001")
+        assert not running.link.writes_refused("SN0002")
         assert "SN0001" in running.recorder.states
         assert running.recorder.dropped == []
         with pytest.raises(ShadowWriteError) as err:
@@ -683,6 +721,7 @@ async def test_cannot_write_without_a_connection() -> None:
     )
     link.set_cameras(CAMERAS)
     assert not link.can_write("SN0001")
+    assert not link.writes_refused("SN0001")
     with pytest.raises(ShadowWriteError) as err:
         await link.update_desired("SN0001", "pir", {"level": 2}, limit=1)
     assert err.value.reason == "not_ready"
@@ -722,6 +761,8 @@ async def test_failed_write_replies_keep_the_reads(
         assert running.link.status.denied_cameras == 0
         assert not running.link.can_write("SN0001")
         assert not running.link.can_write("SN0002")
+        assert running.link.writes_refused("SN0001")
+        assert running.link.writes_refused("SN0002")
         assert len(broker.connections) == connections
 
 

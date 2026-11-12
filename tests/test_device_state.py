@@ -854,13 +854,32 @@ async def test_unwritable_camera_sends_only_the_command(
     config_entry: MockConfigEntry,
     shadow_links: list[FakeShadowLink],
 ) -> None:
-    """A camera whose shadow cannot be written gets only the command."""
+    """A camera whose shadow writes AWS IoT refused gets only the command."""
     hub, link = await _hub(hass, config_entry, shadow_links)
     link.writable = False
+    link.refused = True
     mock_control.send.side_effect = camera_reports(link, motion_level=2)
     await hub.async_apply("SN0001", MotionChange(level=2))
     link.update_desired.assert_not_awaited()
     mock_control.send.assert_awaited_once()
+
+
+async def test_camera_that_starts_again_sends_nothing(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    mock_control: AsyncMock,
+    config_entry: MockConfigEntry,
+    shadow_links: list[FakeShadowLink],
+) -> None:
+    """A connected link that cannot write yet, without a refusal, sends nothing."""
+    hub, link = await _hub(hass, config_entry, shadow_links)
+    link.writable = False
+    with pytest.raises(HomeAssistantError) as err:
+        await hub.async_apply("SN0001", MotionChange(level=2))
+    assert err.value.translation_key == "connection_not_ready"
+    link.update_desired.assert_not_awaited()
+    mock_control.send.assert_not_awaited()
+    assert hub._waiters == {}
 
 
 async def test_unload_ends_the_wait(

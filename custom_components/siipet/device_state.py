@@ -299,13 +299,20 @@ class SiiPetDeviceCoordinator(DataUpdateCoordinator[dict[str, DeviceState]]):
         return self._error("connection_not_ready", sn)
 
     def _may_write_shadow(self, sn: str) -> bool:
+        """Return True to write the shadow, or False to send the command alone.
+
+        Raise while the link is not ready for the camera yet, as while the
+        cameras start again after a reconnect.
+        """
         if self._link.can_write(sn):
             return True
-        # The link cannot confirm writes for this camera, for example after
-        # AWS IoT refused its update replies. The command alone still changes
-        # the setting.
-        _LOGGER.debug("The shadow of %s cannot be written", self._label(sn))
-        return False
+        if self._link.writes_refused(sn):
+            # AWS IoT refused the write replies of this camera, or its writes
+            # are paused. The command alone still changes the setting.
+            _LOGGER.debug("The shadow of %s cannot be written", self._label(sn))
+            return False
+        # The command alone would leave the old value in the desired state.
+        raise self._error("connection_not_ready", sn)
 
     def _ready_state(self, sn: str) -> DeviceState:
         """Return the state of a camera that can take a change now, or raise."""
