@@ -18,7 +18,6 @@ from .common import DEVICE_STATE, FakeShadowLink, setup_integration
     ("entity_id", "state", "category"),
     [
         ("binary_sensor.bathroom_charging", "off", None),
-        ("binary_sensor.bathroom_privacy_mode", "off", None),
         ("binary_sensor.bathroom_online", "on", "diagnostic"),
         ("binary_sensor.bathroom_cloud_storage", "on", "diagnostic"),
     ],
@@ -67,7 +66,7 @@ async def test_missing_value_is_unknown(
 ) -> None:
     """A value that the shadow does not have gives an unknown state."""
     await setup_integration(hass, config_entry)
-    shadow_links[0].on_state("SN0001", replace(DEVICE_STATE, privacy=None))
+    shadow_links[0].on_state("SN0001", replace(DEVICE_STATE, charging=None))
     await hass.async_block_till_done()
-    state = hass.states.get("binary_sensor.bathroom_privacy_mode")
+    state = hass.states.get("binary_sensor.bathroom_charging")
     assert state.state == STATE_UNKNOWN

@@ -1,19 +1,51 @@
-"""The fill-light brightness select of each camera."""
+"""Camera setting selects: night light brightness and motion sensitivity."""
 
 from __future__ import annotations
 
-from homeassistant.components.select import SelectEntity
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+
+from homeassistant.components.select import SelectEntity, SelectEntityDescription
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
-from .commands import (
-    FILL_LIGHT_COMMAND,
-    FILL_LIGHT_LEVELS,
-    FILL_LIGHT_OPTIONS,
-    fill_light_payload,
-)
+from .api import DeviceState
+from .api.settings import FillLightChange, MotionChange, SettingChange
 from .coordinator import SiiPetConfigEntry
-from .entity import SiiPetCameraControlEntity, async_add_camera_state_entities
+from .entity import SiiPetCameraStateEntity, async_add_camera_state_entities
+
+# The device hub queues changes itself.
+PARALLEL_UPDATES = 0
+
+
+@dataclass(frozen=True, kw_only=True)
+class SiiPetSelectDescription(SelectEntityDescription):
+    """A select of one camera setting: its levels, how to read it, how to change it."""
+
+    levels: Mapping[int, str]
+    value_fn: Callable[[DeviceState], int | None]
+    change_fn: Callable[[int], SettingChange]
+
+
+SELECTS: tuple[SiiPetSelectDescription, ...] = (
+    SiiPetSelectDescription(
+        key="fill_light_level",
+        translation_key="fill_light_level",
+        entity_category=EntityCategory.CONFIG,
+        levels={1: "low", 2: "standard", 3: "high"},
+        value_fn=lambda state: state.fill_light,
+        change_fn=lambda level: FillLightChange(level=level),
+    ),
+    SiiPetSelectDescription(
+        key="motion_sensitivity",
+        translation_key="motion_sensitivity",
+        entity_category=EntityCategory.CONFIG,
+        levels={2: "standard", 3: "high"},
+        value_fn=lambda state: state.motion_level,
+        change_fn=lambda level: MotionChange(level=level),
+    ),
+)
 
 
 async def async_setup_entry(
@@ -21,28 +53,38 @@ async def async_setup_entry(
     entry: SiiPetConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Add the fill-light select of each camera."""
+    """Add the setting selects of each camera."""
     async_add_camera_state_entities(
-        entry, async_add_entities, lambda sn: [SiiPetFillLightSelect(entry, sn)]
+        entry,
+        async_add_entities,
+        lambda sn: [
+            SiiPetSettingSelect(entry, sn, description) for description in SELECTS
+        ],
     )
 
 
-class SiiPetFillLightSelect(SiiPetCameraControlEntity, SelectEntity):
-    """Set the night-light brightness level of a camera."""
+class SiiPetSettingSelect(SiiPetCameraStateEntity, SelectEntity):
+    """A camera setting with levels."""
 
-    def __init__(self, entry: SiiPetConfigEntry, sn: str) -> None:
+    entity_description: SiiPetSelectDescription
+
+    def __init__(
+        self, entry: SiiPetConfigEntry, sn: str, description: SiiPetSelectDescription
+    ) -> None:
         """Bind the select to a camera."""
-        super().__init__(entry, sn, "fill_light_brightness")
-        self._attr_options = list(FILL_LIGHT_OPTIONS)
+        super().__init__(entry, sn, description.key)
+        self.entity_description = description
+        self._attr_options = list(description.levels.values())
+        self._levels = {name: level for level, name in description.levels.items()}
 
     @property
     def current_option(self) -> str | None:
-        """The level the camera reports, or the pending choice."""
-        if self._pending is not None:
-            return self._pending
-        return FILL_LIGHT_LEVELS.get(self.state_data.fill_light)
+        """The reported level, or None for a level outside the options."""
+        level = self.entity_description.value_fn(self.state_data)
+        return self.entity_description.levels.get(level) if level is not None else None
 
     async def async_select_option(self, option: str) -> None:
-        """Set a new brightness level."""
-        payload = fill_light_payload(self.state_data, level=FILL_LIGHT_OPTIONS[option])
-        await self._async_send(FILL_LIGHT_COMMAND, payload, option)
+        """Change the level and wait until the camera reports it."""
+        await self.coordinator.async_apply(
+            self.sn, self.entity_description.change_fn(self._levels[option])
+        )

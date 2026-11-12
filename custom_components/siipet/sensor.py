@@ -44,8 +44,6 @@ _LOGGER = logging.getLogger(__name__)
 PARALLEL_UPDATES = 0
 
 # The codes that the Android app names. Other codes give an unknown state.
-FILL_LIGHT_LEVELS: dict[int, str] = {1: "low", 2: "medium", 3: "high"}
-MOTION_LEVELS: dict[int, str] = {2: "medium", 3: "high"}
 UPDATE_MODES: dict[int, str] = {0: "automatic", 1: "manual"}
 
 
@@ -231,8 +229,6 @@ CAMERA_STATE_SENSORS: tuple[SiiPetCameraStateSensorDescription, ...] = (
         entity_registry_enabled_default=False,
         value_fn=lambda state: state.rssi,
     ),
-    _enum("fill_light", FILL_LIGHT_LEVELS, lambda state: state.fill_light),
-    _enum("motion_sensitivity", MOTION_LEVELS, lambda state: state.motion_level),
     _enum("update_mode", UPDATE_MODES, lambda state: state.update_mode),
 )
 

@@ -36,11 +36,6 @@ CAMERA_STATE_BINARY_SENSORS: tuple[SiiPetCameraStateBinarySensorDescription, ...
         value_fn=lambda state: state.charging,
     ),
     SiiPetCameraStateBinarySensorDescription(
-        key="privacy_mode",
-        translation_key="privacy_mode",
-        value_fn=lambda state: state.privacy,
-    ),
-    SiiPetCameraStateBinarySensorDescription(
         key="online",
         translation_key="online",
         device_class=BinarySensorDeviceClass.CONNECTIVITY,

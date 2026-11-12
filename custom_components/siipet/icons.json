@@ -1,12 +1,6 @@
 {
   "entity": {
     "binary_sensor": {
-      "privacy_mode": {
-        "default": "mdi:eye",
-        "state": {
-          "on": "mdi:eye-off"
-        }
-      },
       "cloud_storage": {
         "default": "mdi:cloud-off-outline",
         "state": {
@@ -15,37 +9,35 @@
       }
     },
     "sensor": {
-      "fill_light": {
-        "default": "mdi:lightbulb-on-outline",
-        "state": {
-          "low": "mdi:lightbulb-on-10",
-          "medium": "mdi:lightbulb-on-50",
-          "high": "mdi:lightbulb-on-90"
-        }
-      },
-      "motion_sensitivity": {
-        "default": "mdi:motion-sensor"
-      },
       "update_mode": {
         "default": "mdi:update"
       }
     },
     "select": {
-      "fill_light_brightness": {
+      "fill_light_level": {
         "default": "mdi:lightbulb-on-50",
         "state": {
           "low": "mdi:lightbulb-on-10",
-          "medium": "mdi:lightbulb-on-50",
+          "standard": "mdi:lightbulb-on-50",
           "high": "mdi:lightbulb-on-90"
         }
+      },
+      "motion_sensitivity": {
+        "default": "mdi:motion-sensor"
       }
     },
     "switch": {
       "auto_fill_light": {
         "default": "mdi:lightbulb-auto-outline"
       },
-      "night_vision": {
+      "night_vision_fill_light": {
         "default": "mdi:weather-night"
+      },
+      "privacy_mode": {
+        "default": "mdi:eye",
+        "state": {
+          "on": "mdi:eye-off"
+        }
       }
     }
   }

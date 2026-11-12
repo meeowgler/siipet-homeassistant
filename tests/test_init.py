@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
 from homeassistant.const import CONF_EMAIL
 from homeassistant.core import HomeAssistant
-from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 import pytest
 from pytest_homeassistant.common import MockConfigEntry
 
@@ -217,3 +217,24 @@ async def test_password_relogin_is_saved(
     assert config_entry.data[CONF_TOKEN] == "signed-in-again"
     assert config_entry.data[CONF_PASSWORD_HASH] == SECRET_HASH
     assert config_entry.data[CONF_EMAIL] == "cat@example.com"
+
+
+async def test_setup_removes_the_old_setting_entities(
+    hass: HomeAssistant,
+    mock_client: AsyncMock,
+    config_entry: MockConfigEntry,
+    entity_registry: er.EntityRegistry,
+) -> None:
+    """The read-only setting entities that the controls replace leave the registry."""
+    old = [
+        ("sensor", "SN0001_fill_light"),
+        ("sensor", "SN0001_motion_sensitivity"),
+        ("binary_sensor", "SN0001_privacy_mode"),
+    ]
+    for domain, unique_id in old:
+        entity_registry.async_get_or_create(
+            domain, DOMAIN, unique_id, config_entry=config_entry
+        )
+    await setup_integration(hass, config_entry)
+    for domain, unique_id in old:
+        assert entity_registry.async_get_entity_id(domain, DOMAIN, unique_id) is None

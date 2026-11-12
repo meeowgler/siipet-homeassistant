@@ -130,16 +130,10 @@
     },
     "change_not_confirmed": {
       "message": "{camera} did not confirm the change in {seconds} seconds. It may still apply it."
-    },
-    "control_failed": {
-      "message": "SiiPet did not accept the change. It may be offline; try again."
     }
   },
   "entity": {
     "binary_sensor": {
-      "privacy_mode": {
-        "name": "Privacy mode"
-      },
       "online": {
         "name": "Online"
       },
@@ -205,21 +199,6 @@
       "wifi_signal": {
         "name": "Wi-Fi signal"
       },
-      "fill_light": {
-        "name": "Fill light",
-        "state": {
-          "low": "Low",
-          "medium": "Medium",
-          "high": "High"
-        }
-      },
-      "motion_sensitivity": {
-        "name": "Motion sensitivity",
-        "state": {
-          "medium": "Medium",
-          "high": "High"
-        }
-      },
       "update_mode": {
         "name": "Firmware update mode",
         "state": {
@@ -229,11 +208,18 @@
       }
     },
     "select": {
-      "fill_light_brightness": {
+      "fill_light_level": {
         "name": "Night light brightness",
         "state": {
           "low": "Low",
-          "medium": "Medium",
+          "standard": "Standard",
+          "high": "High"
+        }
+      },
+      "motion_sensitivity": {
+        "name": "Motion sensitivity",
+        "state": {
+          "standard": "Standard",
           "high": "High"
         }
       }
@@ -242,8 +228,11 @@
       "auto_fill_light": {
         "name": "Auto fill light"
       },
-      "night_vision": {
+      "night_vision_fill_light": {
         "name": "Night vision fill light"
+      },
+      "privacy_mode": {
+        "name": "Privacy mode"
       }
     }
   },

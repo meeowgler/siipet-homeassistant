@@ -130,16 +130,10 @@
     },
     "change_not_confirmed": {
       "message": "Kamera {camera} nie potwierdziła zmiany w ciągu {seconds} s. Może jeszcze ją zastosować."
-    },
-    "control_failed": {
-      "message": "SiiPet nie przyjął zmiany. Urządzenie może być offline; spróbuj ponownie."
     }
   },
   "entity": {
     "binary_sensor": {
-      "privacy_mode": {
-        "name": "Tryb prywatności"
-      },
       "online": {
         "name": "Online"
       },
@@ -205,21 +199,6 @@
       "wifi_signal": {
         "name": "Sygnał Wi-Fi"
       },
-      "fill_light": {
-        "name": "Doświetlenie",
-        "state": {
-          "low": "Niskie",
-          "medium": "Średnie",
-          "high": "Wysokie"
-        }
-      },
-      "motion_sensitivity": {
-        "name": "Czułość wykrywania ruchu",
-        "state": {
-          "medium": "Średnia",
-          "high": "Wysoka"
-        }
-      },
       "update_mode": {
         "name": "Tryb aktualizacji oprogramowania",
         "state": {
@@ -229,11 +208,18 @@
       }
     },
     "select": {
-      "fill_light_brightness": {
-        "name": "Jasność podświetlenia nocnego",
+      "fill_light_level": {
+        "name": "Jasność światła nocnego",
         "state": {
           "low": "Niska",
-          "medium": "Średnia",
+          "standard": "Standardowa",
+          "high": "Wysoka"
+        }
+      },
+      "motion_sensitivity": {
+        "name": "Czułość wykrywania ruchu",
+        "state": {
+          "standard": "Standardowa",
           "high": "Wysoka"
         }
       }
@@ -242,8 +228,11 @@
       "auto_fill_light": {
         "name": "Automatyczne doświetlenie"
       },
-      "night_vision": {
+      "night_vision_fill_light": {
         "name": "Doświetlenie nocne"
+      },
+      "privacy_mode": {
+        "name": "Tryb prywatności"
       }
     }
   },

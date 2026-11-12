@@ -1,40 +1,53 @@
-"""The fill-light switches of each camera: auto fill light and night vision."""
+"""Camera setting switches: auto fill light, night vision fill light, privacy mode."""
 
 from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddConfigEntryEntitiesCallback
 
 from .api import DeviceState
-from .commands import FILL_LIGHT_COMMAND, fill_light_payload
+from .api.settings import FillLightChange, PrivacyChange, SettingChange
 from .coordinator import SiiPetConfigEntry
-from .entity import SiiPetCameraControlEntity, async_add_camera_state_entities
+from .entity import SiiPetCameraStateEntity, async_add_camera_state_entities
+
+# The device hub queues changes itself.
+PARALLEL_UPDATES = 0
 
 
 @dataclass(frozen=True, kw_only=True)
 class SiiPetSwitchDescription(SwitchEntityDescription):
-    """A camera switch: how to read it, and the payload to set it."""
+    """A switch of one camera setting: how to read it and how to change it."""
 
     value_fn: Callable[[DeviceState], bool | None]
-    payload_fn: Callable[[DeviceState, bool], dict[str, object]]
+    change_fn: Callable[[bool], SettingChange]
 
 
 SWITCHES: tuple[SiiPetSwitchDescription, ...] = (
     SiiPetSwitchDescription(
         key="auto_fill_light",
         translation_key="auto_fill_light",
+        entity_category=EntityCategory.CONFIG,
         value_fn=lambda state: state.fill_light_auto,
-        payload_fn=lambda state, on: fill_light_payload(state, auto=on),
+        change_fn=lambda on: FillLightChange(auto=on),
     ),
     SiiPetSwitchDescription(
-        key="night_vision",
-        translation_key="night_vision",
+        key="night_vision_fill_light",
+        translation_key="night_vision_fill_light",
+        entity_category=EntityCategory.CONFIG,
         value_fn=lambda state: state.fill_light_night_vision,
-        payload_fn=lambda state, on: fill_light_payload(state, low=on),
+        change_fn=lambda on: FillLightChange(night_vision=on),
+    ),
+    SiiPetSwitchDescription(
+        key="privacy_mode",
+        translation_key="privacy_mode",
+        value_fn=lambda state: state.privacy,
+        change_fn=lambda on: PrivacyChange(active=on),
     ),
 )
 
@@ -44,16 +57,18 @@ async def async_setup_entry(
     entry: SiiPetConfigEntry,
     async_add_entities: AddConfigEntryEntitiesCallback,
 ) -> None:
-    """Add the fill-light switches of each camera."""
+    """Add the setting switches of each camera."""
     async_add_camera_state_entities(
         entry,
         async_add_entities,
-        lambda sn: [SiiPetSwitch(entry, sn, description) for description in SWITCHES],
+        lambda sn: [
+            SiiPetSettingSwitch(entry, sn, description) for description in SWITCHES
+        ],
     )
 
 
-class SiiPetSwitch(SiiPetCameraControlEntity, SwitchEntity):
-    """A camera fill-light switch."""
+class SiiPetSettingSwitch(SiiPetCameraStateEntity, SwitchEntity):
+    """A camera setting that is on or off."""
 
     entity_description: SiiPetSwitchDescription
 
@@ -66,19 +81,17 @@ class SiiPetSwitch(SiiPetCameraControlEntity, SwitchEntity):
 
     @property
     def is_on(self) -> bool | None:
-        """Whether the field is on, or the pending choice."""
-        if self._pending is not None:
-            return self._pending
+        """The reported value."""
         return self.entity_description.value_fn(self.state_data)
 
-    async def async_turn_on(self, **kwargs: object) -> None:
-        """Turn the field on."""
-        await self._set(True)
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        """Turn the setting on and wait until the camera reports it."""
+        await self.coordinator.async_apply(
+            self.sn, self.entity_description.change_fn(True)
+        )
 
-    async def async_turn_off(self, **kwargs: object) -> None:
-        """Turn the field off."""
-        await self._set(False)
-
-    async def _set(self, on: bool) -> None:
-        payload = self.entity_description.payload_fn(self.state_data, on)
-        await self._async_send(FILL_LIGHT_COMMAND, payload, on)
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        """Turn the setting off and wait until the camera reports it."""
+        await self.coordinator.async_apply(
+            self.sn, self.entity_description.change_fn(False)
+        )
