@@ -110,13 +110,10 @@ The Unknown cat has no baseline entities.
 | Subscription expires | Diagnostic. The end of the camera subscription.               |
 | Battery              | The battery charge in percent, rounded like the SiiPet app.   |
 | Charging             | On while the camera reports that it charges.                  |
-| Privacy mode         | On while privacy mode is on.                                  |
 | Online               | Diagnostic. On while the camera reports that it is online.    |
 | Last report          | Diagnostic. The time of the newest value in the device state. |
 | Wi-Fi signal         | Diagnostic, disabled by default. The Wi-Fi signal in dBm.     |
 | Cloud storage        | Diagnostic. On while cloud storage is on for the camera.      |
-| Fill light           | Diagnostic. Low, medium, or high.                             |
-| Motion sensitivity   | Diagnostic. Medium or high.                                   |
 | Firmware update mode | Diagnostic. Automatic or manual.                              |
 
 The camera device shows the firmware version.
@@ -131,14 +128,25 @@ If the connection stays down for 15 minutes, the device state entities become un
 
 ### Controls
 
-Each camera has fill-light controls, sent over SiiPet's realtime service:
+Each camera has these controls:
 
-- **Night light brightness** (`select`): low, medium, or high.
-- **Auto fill light** (`switch`): let the camera turn the light on by itself.
-- **Night vision fill light** (`switch`): keep a dim light on in the dark.
+- **Night light brightness**: low, standard, or high.
+- **Auto fill light**: the camera turns its light on by itself in the dark.
+- **Night vision fill light**: the light used for night vision.
+- **Motion sensitivity**: standard or high.
+- **Privacy mode**: while it is on, the camera does not record visits.
 
-A change shows at once and the camera confirms it a moment later. If the camera
-is offline the change fails with an error, so try again when it is back.
+A change waits until the camera reports the new value. This takes a few seconds.
+If the camera does not confirm the change in 15 seconds, Home Assistant shows an error,
+and the camera may still apply the change later.
+
+A change fails at once when the camera is offline, when its firmware does not support the setting,
+or when the connection to SiiPet is down.
+
+The controls work for an invited account too.
+
+The controls replace the read-only Fill light, Motion sensitivity, and Privacy mode entities of earlier versions.
+Update automations and dashboards that use them.
 
 ### Removed cats and cameras
 

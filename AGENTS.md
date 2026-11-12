@@ -22,16 +22,16 @@ custom_components/siipet/
     s3.py              SigV4 presigned GET URLs, credential cache
     sigv4.py           SigV4 presigned URLs for S3 and the AWS IoT WebSocket
     mqtt.py            MQTT 3.1.1 packets and MqttSession on an aiohttp WebSocket
-    lrtm.py            Centrifugo JSON protocol and LrtmControl on an aiohttp WebSocket, the control lane
+    settings.py        plan_change: the shadow and command values of one setting change
+    lrtm.py            LrtmClient: one Centrifugo command per connection, the realtime command lane
     shadow_link.py     ShadowLink: one AWS IoT connection for the device shadows
   __init__.py          setup of the image and recording views, the actions, the card commands, and the card, entry setup that starts the device state and the local media copy, unload, entry removal that deletes the copy, device removal
   config_flow.py       email step with an optional password, code step with an optional new password, reauth and reconfigure, options step for the days of local media
   const.py             constants: config keys, Unknown cat id, intervals
   coordinator.py       SiiPetCoordinator, SiiPetData, SiiPetRuntime
-  device_state.py      SiiPetDeviceCoordinator: the device state that the shadow link pushes
+  device_state.py      SiiPetDeviceCoordinator: the device state that the shadow link pushes, and the setting changes
   entity.py            cat and camera entity bases
   sensor.py  binary_sensor.py  event.py  select.py  switch.py  diagnostics.py
-  commands.py          device command payloads (the fillLight payload)
   services.py          actions: list_visits, update_visit, delete_visit
   services.yaml        action fields and selectors
   visit_data.py        visit, cat, and camera label helpers, the date check, and the day read for the actions and the card commands
@@ -61,7 +61,8 @@ frontend/              source of the dashboard card: TypeScript, Lit, esbuild, v
 
 - `api/` imports only `aiohttp`, `cryptography`, and the standard library.
   Home Assistant ships both packages, so `manifest.json` has no requirements.
-- Entities read only `coordinator.data`. They never call the client.
+- Entities read only coordinator data. They never call a client.
+  The select and switch entities change a setting only through `SiiPetDeviceCoordinator.async_apply`.
 - `SiiPetData.cat_ids(visit)` decides which cats own a visit.
   A visit with no known cat belongs to the virtual Unknown cat (`UNKNOWN_CAT_ID`).
 - `api/edits.py` has no I/O. `plan_edit` returns the calls, and `services.py` sends them.
@@ -80,7 +81,9 @@ frontend/              source of the dashboard card: TypeScript, Lit, esbuild, v
   It writes only through `siipet.update_visit` and `siipet.delete_visit`.
 - The card reuses internal tile parts of the Home Assistant frontend. `frontend/src/tile-parts.ts` lists them.
   If a part is missing, the card names it and shows nothing else.
-- Only `api/shadow_link.py` talks to AWS IoT. It reads the shadows and never writes them.
+- Only `api/shadow_link.py` talks to AWS IoT. It writes the shadow `desired` only for the settings
+  that the app writes there: `fillLight` and `pir`.
+- Only `api/lrtm.py` talks to the realtime (Centrifugo) server.
 - The device state entities read `SiiPetDeviceCoordinator.data`, and the camera list of the main coordinator for availability. The shadow link runs as a background task, so setup never waits for it.
 
 ## API facts that are easy to get wrong
@@ -107,12 +110,17 @@ Read `docs/api.md` before you change `api/`. These points cause most mistakes:
 - With a stored password digest, the client signs in again by itself after an auth error,
   at most once per `RELOGIN_COOLDOWN_MS`. In a live check, a password sign-in ended the session
   of the phone app. Whether every sign-in ends the other sessions is an open point in `docs/api.md`.
-- A setting is changed over Centrifugo at `wss://wss-siipet.linkric.com/connection/websocket`,
-  not the REST API. Connect `data` carries the API token and user id. The app publishes
-  `{"request": {"header": {"name", "sessionId", "deviceId"}, "payload"}}` to
-  `device:joy1:<SN>:app:dev:request`. `config.fillLight` takes the whole fillLight object.
-- The command alone applies; the app also writes the shadow `desired` to clear the delta.
-  The integration sends the command and does not write the shadow (read-only shadow link).
+- A setting change copies the app. For the fill light and the motion sensitivity, write the shadow `desired`,
+  then publish the realtime command with the same object, then wait until `reported` matches.
+  Privacy mode is only the command. The app never writes `desired.privacyMode`.
+- The realtime server is Centrifugo. The connect command has the name `java` and the data
+  `{"platform": 1, "appConnectData": {"token", "userId"}}`. Commands go to `device:joy1:<SN>:app:dev:request`.
+- The realtime server answers an invalid or ended token with error 401.
+- AWS IoT accepts the desired write from the owner and from an invited account.
+- `brightness2` and the motion `sense` come from `JOY1SystemConfig` of `/api/v1/device/detail`.
+  The values 40, 70, and 120 on the app's slider are display values only.
+- The app shows the fill light and the motion settings only when feature `6` of `FeatureOpen` is on for the firmware.
+  `FeatureOpen` lists `FeatureId` as a list of strings.
 - `Data.IotCore.Endpoint` of `config/aws/auth` is an `https://` URL. The WebSocket host is its host part.
 - AWS IoT signs the WebSocket URL without the session token. The token goes after the signature.
 
