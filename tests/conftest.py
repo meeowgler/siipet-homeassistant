@@ -18,6 +18,8 @@ from custom_components.siipet.api import (
     CalendarDay,
     Camera,
     Cat,
+    DeviceSettings,
+    FeatureRules,
     MediaCredentials,
     Session,
 )
@@ -128,6 +130,12 @@ def mock_client_class() -> Generator[MagicMock]:
         client.get_calendar.return_value = tuple(
             CalendarDay.from_api(item)
             for item in load_data("pet_calendar.json")["DataCalendar"]
+        )
+        client.get_feature_rules.return_value = FeatureRules.from_api(
+            load_data("system_config.json")
+        )
+        client.get_device_settings.return_value = DeviceSettings.from_api(
+            load_data("device_detail.json")
         )
         yield client_class
 

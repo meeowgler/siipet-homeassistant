@@ -99,7 +99,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: SiiPetConfigEntry) -> No
     media = SiiPetMedia(
         hass, coordinator, client, S3Signer(client.get_media_credentials)
     )
-    device_state = SiiPetDeviceCoordinator(hass, entry, coordinator, client)
+    device_state = SiiPetDeviceCoordinator(hass, entry, coordinator, client, control)
     entry.runtime_data = SiiPetRuntime(
         client=client,
         control=control,

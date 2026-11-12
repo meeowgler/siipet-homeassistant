@@ -40,3 +40,9 @@ MIDNIGHT_GRACE: Final = timedelta(hours=1)
 WINDOW_DAYS: Final = 7
 # How long the device state entities keep their values without a connection.
 DEVICE_STATE_GRACE: Final = timedelta(minutes=15)
+# A setting change waits this long, in line and for the camera's report. It is
+# about five times the slowest report seen in live checks.
+CHANGE_TIMEOUT: Final = timedelta(seconds=15)
+# The wait for AWS IoT to answer a desired write. Without an answer the change
+# goes on with the command, as the app does.
+SHADOW_WRITE_TIMEOUT: Final = timedelta(seconds=5)
