@@ -74,7 +74,7 @@ registered timezone.
 | `/api/v1/pet/toilet/event/annotate`   | Edit cat assignment or event classification.      |
 | `/api/v1/pet/toilet/data/calendar`    | Per-day history for charts.                       |
 | `/api/v1/config/system/config`        | Client configuration. Called often.               |
-| `/api/v1/device/detail`               | Per-camera configuration, including the level values of the fill light and the motion sensitivity. |
+| `/api/v1/device/detail`               | Per-camera configuration, with the level values.  |
 | `/api/v1/config/aws/auth`             | Temporary credentials for media and device state. |
 | `/api/v1/user/firebase/token/bind`    | Push notification registration.                   |
 
@@ -1189,10 +1189,10 @@ These results come from tests against a real account.
   `data` carrying the API token and user id, changed the camera's reported
   `fillLight.level` (tested low, medium, high) and its `lowLight` field. The
   camera applied the command and reported the new value over its shadow.
-- The command alone is enough. Sent without the shadow `desired` write, the
-  camera still applied it and reported the change. The shadow then showed a
-  `delta` for the stale `desired`. The camera may read the stale `desired` back
-  at a reconnect, so the integration writes `desired` as the app does.
+- Sent without the shadow `desired` write, the camera still applied the command
+  and reported the change. The shadow then showed a `delta` for the stale
+  `desired`. Whether the camera applies a stale `desired` at a reconnect is an
+  open point, so the integration writes `desired` as the app does.
 - AWS IoT accepted a `desired` write for `fillLight` to the config shadow from the
   owner account and from an invited account. It answered `update/accepted` in about
   150 ms. Both accounts were granted the `update/accepted` and `update/rejected`
@@ -1245,7 +1245,7 @@ These results come from tests against a real account.
 - Whether the server checks `x-device-os`. `iOS 27.0` works with both model prefixes.
 - Whether the camera acts on the command or on the `desired` delta, and whether it
   applies a stale `desired` at boot.
-- The Centrifugo error codes for an expired token other than 401, if any.
+- Whether the server also answers an ended session with `Code` -4. The live check saw -2 for an expired token.
 - Whether an account allows more than one active session. The earlier -2 results
   came from the model header, so they do not answer this. A password sign-in
   from a script ended the session of the phone app. After an email-code sign-in
