@@ -108,12 +108,27 @@ class Recorder:
 
 
 @dataclass
+class Clock:
+    """The real clock, moved forward by `offset`.
+
+    A test ends a wait of the link, such as a write pause or the life of the
+    credentials, by moving the clock instead of sleeping.
+    """
+
+    offset: timedelta = timedelta()
+
+    def __call__(self) -> datetime:
+        return datetime.now(UTC) + self.offset
+
+
+@dataclass
 class Running:
     link: ShadowLink
     recorder: Recorder
     fetch: AsyncMock
     broker: FakeBroker
     task: asyncio.Task[None]
+    clock: Clock
 
 
 @asynccontextmanager
@@ -126,6 +141,7 @@ async def _running(
 ) -> AsyncIterator[Running]:
     recorder = Recorder()
     fetch = fetch or AsyncMock(return_value=_credentials())
+    clock = Clock()
     async with run_broker(broker) as url, aiohttp.ClientSession() as websession:
         link = ShadowLink(
             websession,
@@ -134,12 +150,13 @@ async def _running(
             recorder.on_connection,
             NAMES.__getitem__,
             timings=timings,
+            clock=clock,
             url=lambda _credentials, _now: f"{url}?{SIGNED_QUERY}",
         )
         link.set_cameras(CAMERAS if cameras is None else cameras)
         task = asyncio.create_task(link.run())
         try:
-            yield Running(link, recorder, fetch, broker, task)
+            yield Running(link, recorder, fetch, broker, task, clock)
         finally:
             await link.stop()
 
@@ -652,36 +669,75 @@ async def test_update_desired_unconfirmed_when_the_connection_drops() -> None:
 
 async def test_writes_stay_refused_until_the_write_replies_subscribe() -> None:
     """After the pause ends, the camera stays read-only until a new start subscribes its write replies."""
-    timings = replace(FAST, denied_retry=timedelta(seconds=0.2))
     broker = _broker(close_on_update={"SN0001"})
-    async with _running(broker, timings=timings) as running:
+    async with _running(broker) as running:
         await _started(running)
         await running.link.update_desired("SN0001", "pir", {"level": 2}, limit=1)
+        # The pause lasts minutes, so the camera starts again without its write replies.
         await _until(lambda: running.recorder.connection == [True, False, True])
-        await asyncio.sleep(0.3)
+        running.clock.offset = FAST.denied_retry
+        # A read round reads four shadows, and a start round follows it. After
+        # three read rounds, a start round has run since the pause ended.
+        reads = len(broker.gets)
+        await _until(lambda: len(broker.gets) >= reads + 12)
         assert not running.link.can_write("SN0001")
         assert running.link.writes_refused("SN0001")
+        assert f"{UPDATE}/accepted" not in broker.connections[1].subscriptions
         assert len(broker.connections) == 2
 
 
 async def test_cameras_that_start_again_are_not_refused() -> None:
     """During a planned reconnect, a camera that has not started again cannot write, and is not refused."""
-    soon = replace(
-        _credentials(),
-        expires=datetime.now(UTC) + timedelta(minutes=10, seconds=0.5),
-    )
-    fetch = AsyncMock(side_effect=[soon, _credentials()])
+    fetch = AsyncMock(side_effect=[_credentials(), _credentials(hours=20)])
     broker = _broker()
     async with _running(broker, fetch=fetch) as running:
         await _started(running)
         # The new start of the camera waits for the reply time.
         broker.silent_get.add("SN0001")
+        # The first credentials now need renewal, so the link reconnects.
+        running.clock.offset = timedelta(hours=10)
         await _until(lambda: len(broker.connections) == 2)
         assert running.link.status.connected
         assert not running.link.can_write("SN0001")
         assert not running.link.writes_refused("SN0001")
         await _until(lambda: running.link.can_write("SN0001"))
         assert running.recorder.connection == [True]
+
+
+async def test_paused_camera_is_not_refused_while_it_starts_again() -> None:
+    """After its pause ends, a camera is not refused until it starts on a new connection, and then can write."""
+    issued = [_credentials(), _credentials(hours=20)]
+    renew = asyncio.Event()
+
+    async def credentials() -> IotCredentials:
+        if len(issued) == 1:
+            await renew.wait()
+        return issued.pop(0)
+
+    fetch = AsyncMock(side_effect=credentials)
+    broker = _broker(close_on_update={"SN0001"})
+    async with _running(broker, fetch=fetch) as running:
+        await _started(running)
+        await running.link.update_desired("SN0001", "pir", {"level": 2}, limit=1)
+        await _until(lambda: running.recorder.connection == [True, False, True])
+        assert running.link.writes_refused("SN0001")
+        # The new start of the camera waits for the reply time.
+        broker.silent_get.add("SN0001")
+        # The pause ends, and the first credentials need renewal, so the link
+        # reconnects. It waits for new credentials until the test lets it go on.
+        running.clock.offset = timedelta(hours=10)
+        await _until(lambda: fetch.await_count == 2)
+        assert running.link.status.connected
+        assert not running.link.can_write("SN0001")
+        assert not running.link.writes_refused("SN0001")
+        renew.set()
+        await _until(lambda: len(broker.connections) == 3)
+        assert not running.link.can_write("SN0001")
+        assert not running.link.writes_refused("SN0001")
+        await _until(lambda: running.link.can_write("SN0001"))
+        assert not running.link.writes_refused("SN0001")
+        assert f"{UPDATE}/accepted" in broker.connections[2].subscriptions
+        assert running.recorder.connection == [True, False, True]
 
 
 async def test_update_desired_ignores_other_tokens() -> None:

@@ -123,7 +123,7 @@
       "message": "The connection to the SiiPet cameras is down. Try again in a few minutes."
     },
     "change_not_sent": {
-      "message": "SiiPet did not accept the change for {camera}: {error}"
+      "message": "The change for {camera} was not sent: {error}"
     },
     "change_timed_out": {
       "message": "The change for {camera} ran out of time before it was sent. Try again."

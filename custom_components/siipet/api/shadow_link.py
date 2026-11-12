@@ -245,8 +245,6 @@ class ShadowLink:
             )
         session = MqttSession(ws, self._handle_message, write_limit=self._timings.reply)
         self._session = session
-        self._started.clear()
-        self._writable.clear()
         try:
             await session.connect(
                 f"{credentials.identity_id}:{uuid4().hex}",
@@ -262,6 +260,10 @@ class ShadowLink:
             await self._serve(session, credentials)
         finally:
             self._session = None
+            # Each camera starts again on the next connection. Until then it
+            # counts as not started, also for `writes_refused`.
+            self._started.clear()
+            self._writable.clear()
             await session.close()
 
     async def _current_credentials(self) -> IotCredentials:
@@ -304,9 +306,11 @@ class ShadowLink:
     async def _start_cameras(self, session: MqttSession) -> None:
         """Start each camera that is not started, unless it waits after a denial.
 
-        All cameras read first, and then subscribe to the write replies. AWS
-        IoT limits the subscriptions of one connection, so a limit reached by
-        the write replies costs no camera its reads.
+        In one round, every camera reads first, and then the cameras that
+        started subscribe to their write replies. AWS IoT limits the
+        subscriptions of one connection, so in that round a limit reached by
+        the write replies costs no camera its reads. A camera that starts in a
+        later round reads after the write replies of the earlier rounds.
         """
         started: list[tuple[str, CameraShadows]] = []
         for sn in list(self._cameras):
@@ -338,8 +342,7 @@ class ShadowLink:
 
         A refused read subscription denies the camera at once. An MqttError
         in the reads is a strike, and `DENY_STRIKES` strikes in a row deny the
-        camera. The error still ends the connection. The write replies never
-        count a strike.
+        camera. The error still ends the connection.
         """
         # A retry after the denied wait starts clean, so its replies are read.
         self._denied.pop(sn, None)
@@ -393,8 +396,8 @@ class ShadowLink:
         AWS IoT can refuse these topics to an account that may read. A refusal
         only means that the camera cannot be written, so it never denies the
         camera. A subscription that fails pauses the writes of the camera, so
-        the next start reads it without them. The error ends the connection
-        only when the connection is already closed.
+        the next start reads it without them. Neither counts a strike. The
+        error ends the connection only when the connection is already closed.
         """
         topics = [shadow_topic(sn, shadows.config, suffix) for suffix in UPDATE_REPLIES]
         try:
@@ -444,12 +447,20 @@ class ShadowLink:
         )
 
     def writes_refused(self, sn: str) -> bool:
-        """True when AWS IoT refused the write replies of the camera, or its writes are paused.
+        """True when a change to the camera must go without a desired write.
 
-        Both last until a later start subscribes the write replies of the
-        camera.
+        This holds when AWS IoT refused the write replies of the camera, while
+        its writes are paused, and after the pause while the camera stays
+        started without its write replies. A refusal lasts until a later start
+        subscribes the write replies. After the pause, a camera that is not
+        started on the current connection is not refused, because its start
+        subscribes the write replies.
         """
-        return sn in self._writes_refused or sn in self._writes_paused
+        return (
+            sn in self._writes_refused
+            or self._writes_on_hold(sn)
+            or (sn in self._writes_paused and sn in self._started)
+        )
 
     def can_write(self, sn: str) -> bool:
         """True while the link is connected and can confirm writes for the camera."""
