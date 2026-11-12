@@ -77,6 +77,8 @@ class FakeBroker:
     reject_update: set[str] = field(default_factory=set)
     silent_update: set[str] = field(default_factory=set)
     close_on_update: set[str] = field(default_factory=set)
+    # Subscriptions that one connection may hold. AWS IoT refuses a topic past the limit.
+    max_subscriptions: int | None = None
     handshake_status: int | None = None
     connections: list[BrokerConnection] = field(default_factory=list)
     gets: list[str] = field(default_factory=list)
@@ -136,7 +138,11 @@ class FakeBroker:
                 return False
             codes = bytearray()
             for topic in topics:
-                if _serial(topic) in self.deny_subscribe or topic in self.deny_topics:
+                if (
+                    _serial(topic) in self.deny_subscribe
+                    or topic in self.deny_topics
+                    or self._over_limit(connection, topic)
+                ):
                     codes.append(SUBACK_FAILURE)
                 else:
                     connection.subscriptions.add(topic)
@@ -156,6 +162,13 @@ class FakeBroker:
             connection.disconnected = True
             return False
         return True
+
+    def _over_limit(self, connection: BrokerConnection, topic: str) -> bool:
+        return (
+            self.max_subscriptions is not None
+            and topic not in connection.subscriptions
+            and len(connection.subscriptions) >= self.max_subscriptions
+        )
 
     async def _get(self, connection: BrokerConnection, topic: str) -> bool:
         if not topic.endswith("/get"):

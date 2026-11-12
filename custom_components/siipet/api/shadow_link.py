@@ -302,7 +302,13 @@ class ShadowLink:
             await self._start_cameras(session)
 
     async def _start_cameras(self, session: MqttSession) -> None:
-        """Start each camera that is not started, unless it waits after a denial."""
+        """Start each camera that is not started, unless it waits after a denial.
+
+        All cameras read first, and then subscribe to the write replies. AWS
+        IoT limits the subscriptions of one connection, so a limit reached by
+        the write replies costs no camera its reads.
+        """
+        started: list[tuple[str, CameraShadows]] = []
         for sn in list(self._cameras):
             shadows = self._cameras.get(sn)
             if shadows is None or sn in self._started:
@@ -314,11 +320,21 @@ class ShadowLink:
             ):
                 continue
             await self._start_camera(session, sn, shadows)
+            started.append((sn, shadows))
+        for sn, shadows in started:
+            # set_cameras can replace or remove a camera, and a read can deny
+            # it, while other cameras start.
+            if (
+                self._cameras.get(sn) == shadows
+                and sn in self._started
+                and not self._writes_on_hold(sn)
+            ):
+                await self._subscribe_updates(session, sn, shadows)
 
     async def _start_camera(
         self, session: MqttSession, sn: str, shadows: CameraShadows
     ) -> None:
-        """Subscribe to the replies of both shadows, read both, then subscribe to the write replies.
+        """Subscribe to the replies of both shadows, and read both.
 
         A refused read subscription denies the camera at once. An MqttError
         in the reads is a strike, and `DENY_STRIKES` strikes in a row deny the
@@ -335,8 +351,6 @@ class ShadowLink:
             if not self._stopping and self._cameras.get(sn) == shadows:
                 self._strike(sn)
             raise
-        if sn in self._started and not self._writes_on_hold(sn):
-            await self._subscribe_updates(session, sn, shadows)
 
     async def _subscribe_and_read(
         self, session: MqttSession, sn: str, shadows: CameraShadows

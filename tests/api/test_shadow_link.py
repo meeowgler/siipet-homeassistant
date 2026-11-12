@@ -37,7 +37,7 @@ pytestmark = pytest.mark.usefixtures("socket_enabled")
 
 SHADOWS = CameraShadows(config="fake_configInfo", system="fake_systemInfo")
 CAMERAS = {"SN0001": SHADOWS, "SN0002": SHADOWS}
-NAMES = {"SN0001": "Bathroom", "SN0002": "Hallway"}
+NAMES = {"SN0001": "Bathroom", "SN0002": "Hallway", "SN0003": "Kitchen"}
 FAST = LinkTimings(
     reply=0.5,
     keepalive=1,
@@ -712,6 +712,26 @@ async def test_refused_update_replies_keep_the_reads() -> None:
             await running.link.update_desired("SN0001", "pir", {"level": 2}, limit=1)
         assert err.value.reason == "not_ready"
         assert running.broker.updates == []
+
+
+async def test_write_replies_after_the_reads_of_every_camera() -> None:
+    """A subscription limit that refuses write replies costs no camera its state."""
+    cameras = {**CAMERAS, "SN0003": SHADOWS}
+    # Room for the reads of three cameras and the write replies of one.
+    broker = _broker(max_subscriptions=20)
+    broker.documents["SN0003/fake_configInfo"] = load_fixture(
+        "shadow_config_accepted.json"
+    )
+    async with _running(broker, cameras=cameras) as running:
+        await _until(lambda: running.recorder.connection == [True])
+        assert set(running.recorder.states) == set(cameras)
+        assert running.recorder.dropped == []
+        assert running.link.status.denied_cameras == 0
+        assert running.link.can_write("SN0001")
+        for sn in ("SN0002", "SN0003"):
+            assert not running.link.can_write(sn)
+            assert running.link.writes_refused(sn)
+        assert len(broker.connections) == 1
 
 
 async def test_cannot_write_without_a_connection() -> None:
